@@ -46,6 +46,24 @@
       transition: opacity 0.15s linear;
     }
     #coverHint.on { opacity: 0.9; }
+    #hpWrap {
+      position: absolute; top: max(14px, env(safe-area-inset-top, 0px)); left: 50%;
+      transform: translateX(-50%); width: min(280px, 46%); height: 12px;
+      border: 1px solid rgba(232, 220, 200, 0.35); background: rgba(14, 18, 16, 0.55);
+      border-radius: 3px; overflow: hidden;
+    }
+    #hpBar { height: 100%; width: 100%; background: #c45c4a; transform-origin: left center; }
+    #fail {
+      position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      background: rgba(8, 10, 9, 0.78); pointer-events: auto; z-index: 8; text-align: center; padding: 24px;
+    }
+    #fail.hidden { display: none; }
+    #fail h2 { letter-spacing: 0.28em; font-size: clamp(22px, 5vw, 36px); margin-bottom: 10px; }
+    #fail p { opacity: 0.8; margin-bottom: 16px; }
+    #fail button {
+      padding: 12px 22px; border-radius: 8px; border: 1px solid rgba(243, 193, 74, 0.45);
+      background: rgba(243, 193, 74, 0.2); color: #e8dcc8; font-size: 15px; cursor: pointer;
+    }
     #hint {
       position: absolute; left: 20px; bottom: 20px; font-size: 12px; line-height: 1.55; opacity: 0.72;
       text-shadow: 0 1px 2px #000; max-width: 300px;
@@ -98,6 +116,7 @@
       <div id="crosshair" class="hidden"><i class="h"></i><i class="v"></i></div>
       <div id="ammo">30 <span>/ 90</span></div>
       <div id="coverHint">COVER</div>
+      <div id="hpWrap"><div id="hpBar"></div></div>
       <div id="hint">
         WASD move · Mouse aim · Click shoot<br />
         Shift sprint · Space vault · C / Ctrl slide · R reload<br />
@@ -114,6 +133,11 @@
     <div id="start">
       <h1>PIPE HITTERS</h1>
       <p>Click or tap to start. Move with the left stick or WASD, aim with the right stick or the mouse, and clear the test yard.</p>
+    </div>
+    <div id="fail" class="hidden">
+      <h2>DOWN</h2>
+      <p>You were dropped in the yard. Try again from the start.</p>
+      <button id="btnRetry" type="button">Try again</button>
     </div>
     <div id="pause" class="hidden">
       <div class="panel">
@@ -201,6 +225,8 @@ let paused = false;
 let cssLandscape = false;
 let assistTarget = null;
 let recentlyShot = 0;
+let missionOver = false;
+const stats = { kills: 0, shots: 0, hits: 0, start: 0 };
 
 const player = {
   pos: new THREE.Vector3(0, 0, 14),
@@ -219,6 +245,9 @@ const player = {
   crouch: false,
   inCover: false,
   coverDR: 1,
+  hp: 100,
+  maxHp: 100,
+  lastHit: -99,
 };
 
 const cam = {
@@ -398,11 +427,20 @@ function makeDummy(x, z, facing) {
   scene.add(root);
   const d = {
     root, x, z, facing, homeX: x, homeZ: z,
-    hp: 3, max: 3, state: "idle", t: 0,
-    flash: 0, strafe: Math.random() * Math.PI * 2,
+    hp: 4, max: 4, state: "patrol", t: 0,
+    flash: 0, shootCd: Math.random() * 0.8,
+    crouch: false, alert: 0, lastSeen: null, wp: 0,
+    waypoints: [{ x: x + 1.8, z: z + 1.1 }, { x: x - 1.5, z: z - 1.4 }],
     mats: [],
   };
   root.traverse((o) => { if (o.isMesh) d.mats.push(o.material); });
+  const barBg = boxMesh(0.72, 0.08, 0.08, 0x2a221c, 0, 1.9, 0);
+  const barFill = boxMesh(0.68, 0.06, 0.09, 0x7cba5a, 0, 1.9, 0);
+  barBg.material = new THREE.MeshBasicMaterial({ color: 0x2a221c });
+  barFill.material = new THREE.MeshBasicMaterial({ color: 0x7cba5a });
+  root.add(barBg, barFill);
+  d.barBg = barBg;
+  d.barFill = barFill;
   dummies.push(d);
   return d;
 }
@@ -580,13 +618,66 @@ function toggleCamera() {
   applyCameraMode();
 }
 
+function resetBot(d) {
+  d.hp = d.max;
+  d.state = "patrol";
+  d.t = 0;
+  d.flash = 0;
+  d.crouch = false;
+  d.alert = 0;
+  d.lastSeen = null;
+  d.wp = 0;
+  d.shootCd = Math.random() * 0.8;
+  d.root.position.set(d.homeX, 0, d.homeZ);
+  d.root.rotation.set(0, d.facing, 0);
+  for (const m of d.mats) m.emissive.setHex(0x000000);
+  if (d.barBg) d.barBg.visible = true;
+  if (d.barFill) { d.barFill.visible = true; d.barFill.scale.x = 1; d.barFill.position.x = 0; }
+}
+
+function resetMission() {
+  player.pos.set(0, 0, 14);
+  player.vel.set(0, 0, 0);
+  player.yaw = Math.PI;
+  player.bodyYaw = Math.PI;
+  player.pitch = 0.1;
+  player.stance = "stand";
+  player.vault = null;
+  player.slideT = 0;
+  player.mag = MAG;
+  player.reserve = RESERVE_MAX;
+  player.reloadT = 0;
+  player.hp = player.maxHp;
+  player.lastHit = -99;
+  player.crouch = false;
+  player.inCover = false;
+  assistTarget = null;
+  recentlyShot = 0;
+  missionOver = false;
+  stats.kills = 0; stats.shots = 0; stats.hits = 0;
+  stats.start = performance.now();
+  document.getElementById("fail").classList.add("hidden");
+  for (const d of dummies) resetBot(d);
+}
+
+function failMission() {
+  if (missionOver) return;
+  missionOver = true;
+  player.hp = 0;
+  document.getElementById("fail").classList.remove("hidden");
+  if (document.pointerLockElement) document.exitPointerLock();
+  mouse.down = false;
+  syncUi();
+}
+
 function startPlay() {
   if (isTouchDevice() || touchMode) showTouch(true);
+  resetMission();
   setPlaying(true);
   if (!isTop() && !touchMode) canvas.requestPointerLock();
 }
 
-function gameActive() { return playing && !paused; }
+function gameActive() { return playing && !paused && !missionOver; }
 
 function bindKeys() {
   window.addEventListener("keydown", (e) => {
@@ -636,6 +727,12 @@ startEl.addEventListener("touchstart", (e) => {
 
 btnPause.addEventListener("click", (e) => { e.stopPropagation(); if (playing) setPaused(true); });
 btnResume.addEventListener("click", (e) => { e.stopPropagation(); setPaused(false); });
+document.getElementById("btnRetry").addEventListener("click", (e) => {
+  e.stopPropagation();
+  resetMission();
+  setPaused(false);
+  if (!isTop() && !touchMode) canvas.requestPointerLock();
+});
 optCamera.addEventListener("click", (e) => { e.stopPropagation(); toggleCamera(); });
 optLandscape.addEventListener("click", (e) => { e.stopPropagation(); setLandscape(!settings.landscape); });
 optInvert.addEventListener("click", (e) => {
@@ -1162,14 +1259,47 @@ function worldHit(origin, dir, maxD) {
 }
 
 function hurtDummy(dum) {
+  if (dum.state === "down") return;
   dum.hp -= 1;
   dum.flash = 0.12;
   hitFlash = 0.09;
+  stats.hits += 1;
+  dum.alert = Math.max(dum.alert, 3);
+  dum.lastSeen = { x: player.pos.x, z: player.pos.z };
   if (dum.hp <= 0) {
     dum.state = "down";
     dum.t = 0;
     dum.hp = 0;
+    dum.crouch = false;
+    stats.kills += 1;
+    if (dum.barBg) dum.barBg.visible = false;
+    if (dum.barFill) dum.barFill.visible = false;
+  } else if (dum.barFill) {
+    const u = dum.hp / dum.max;
+    dum.barFill.scale.x = Math.max(0.05, u);
+    dum.barFill.position.x = (u - 1) * 0.34;
+    dum.barFill.material.color.setHex(u < 0.35 ? 0xc45c4a : 0x7cba5a);
   }
+}
+
+function hurtPlayer(amount) {
+  if (missionOver) return;
+  player.hp -= amount * player.coverDR;
+  player.lastHit = performance.now();
+  if (player.hp <= 0) failMission();
+}
+
+function playerHitTest(origin, dir, maxD) {
+  const cx = player.pos.x, cy = player.crouch ? 0.55 : 0.9, cz = player.pos.z;
+  const px = cx - origin.x, py = cy - origin.y, pz = cz - origin.z;
+  const t = px * dir.x + py * dir.y + pz * dir.z;
+  if (t < 0 || t > maxD) return null;
+  const qx = origin.x + dir.x * t - cx;
+  const qy = origin.y + dir.y * t - cy;
+  const qz = origin.z + dir.z * t - cz;
+  const rad = player.crouch ? 0.42 : 0.5;
+  if (qx * qx + qz * qz < rad * rad && Math.abs(qy) < (player.crouch ? 0.7 : 1.05)) return t;
+  return null;
 }
 
 function fire() {
@@ -1179,6 +1309,7 @@ function fire() {
   if (now - player.lastShot < FIRE_MS) return;
   player.lastShot = now;
   player.mag -= 1;
+  stats.shots += 1;
   cam.kickP += isTop() ? 0.006 : 0.024;
   cam.kickY += (Math.random() - 0.5) * (isTop() ? 0.004 : 0.014);
   cam.punch += isTop() ? 0.04 : 0.12;
@@ -1233,35 +1364,150 @@ function updateShoot(dt) {
   }
 }
 
+function botSeePlayer(d) {
+  const dx = player.pos.x - d.root.position.x;
+  const dz = player.pos.z - d.root.position.z;
+  const dist = Math.hypot(dx, dz);
+  if (dist > 18) return false;
+  if (losBlocked(d.root.position.x, d.root.position.z, player.pos.x, player.pos.z)) return false;
+  return dist;
+}
+
+function moveBot(d, tx, tz, speed, dt) {
+  const dx = tx - d.root.position.x, dz = tz - d.root.position.z;
+  const dist = Math.hypot(dx, dz);
+  if (dist < 0.22) return true;
+  const hit = collideXZ(d.root.position.x + (dx / dist) * speed * dt, d.root.position.z + (dz / dist) * speed * dt, 0.36);
+  d.root.position.x = hit.x;
+  d.root.position.z = hit.z;
+  d.root.rotation.y = dampAngle(d.root.rotation.y, Math.atan2(dx, dz), 7, dt);
+  return false;
+}
+
+function coverPointFor(d) {
+  let best = null, bestD = 9;
+  for (const o of obstacles) {
+    if (!lowCover(o)) continue;
+    const mx = (o.minX + o.maxX) * 0.5, mz = (o.minZ + o.maxZ) * 0.5;
+    const dist = Math.hypot(d.root.position.x - mx, d.root.position.z - mz);
+    if (dist > 9 || dist < 0.2) continue;
+    const awayX = mx - player.pos.x, awayZ = mz - player.pos.z;
+    const n = Math.hypot(awayX, awayZ) || 1;
+    const hx = (o.maxX - o.minX) * 0.5 + 0.6;
+    const hz = (o.maxZ - o.minZ) * 0.5 + 0.6;
+    const px = mx + (awayX / n) * hx;
+    const pz = mz + (awayZ / n) * hz;
+    if (blockedAt(px, pz, 0.35)) continue;
+    if (dist < bestD) { bestD = dist; best = { x: px, z: pz }; }
+  }
+  return best;
+}
+
+function enemyFire(d) {
+  const spread = (Math.random() - 0.5) * 0.2;
+  const yaw = d.root.rotation.y + spread;
+  const origin = new THREE.Vector3(d.root.position.x, d.crouch ? 0.72 : 1.15, d.root.position.z);
+  const dir = new THREE.Vector3(Math.sin(yaw), -0.02, Math.cos(yaw)).normalize();
+  const world = worldHit(origin, dir, 22);
+  const pHit = playerHitTest(origin, dir, world.dist);
+  let end;
+  if (pHit != null) {
+    end = origin.clone().addScaledVector(dir, pHit);
+    hurtPlayer(6);
+  } else if (world.pt) {
+    end = world.pt;
+  } else {
+    end = origin.clone().addScaledVector(dir, 20);
+  }
+  spawnTracer(origin.x, origin.y, origin.z, end.x, end.y, end.z);
+  spawnSpark(end.x, end.y, end.z);
+}
+
 function updateDummies(dt) {
+  const hear = recentlyShot > 0 || (performance.now() - player.lastShot < 400);
+  const candidates = [];
   for (const d of dummies) {
     if (d.flash > 0) {
       d.flash -= dt;
-      const on = d.flash > 0;
-      for (const m of d.mats) m.emissive.setHex(on ? 0x665533 : 0x000000);
+      for (const m of d.mats) m.emissive.setHex(d.flash > 0 ? 0x665533 : 0x000000);
     }
     if (d.state === "down") {
       d.t += dt;
       d.root.rotation.x = clamp(d.t / 0.35, 0, 1) * 1.45;
       d.root.position.y = 0;
-      if (d.t > 2.4) {
-        d.state = "idle";
-        d.hp = d.max;
-        d.root.rotation.x = 0;
-        d.root.position.set(d.homeX, 0, d.homeZ);
-      }
+      d.crouch = false;
       continue;
     }
-    d.strafe += dt * 0.7;
-    const nx = d.homeX + Math.sin(d.strafe) * 0.55;
-    const nz = d.homeZ + Math.cos(d.strafe * 0.7) * 0.35;
-    if (!blockedAt(nx, nz, 0.4)) {
-      d.root.position.x = nx;
-      d.root.position.z = nz;
+    d.root.rotation.x = d.crouch ? 0.12 : 0;
+    d.root.position.y = d.crouch ? -0.28 : 0;
+    d.shootCd = Math.max(0, d.shootCd - dt);
+    const distSee = botSeePlayer(d);
+    const dist = Math.hypot(player.pos.x - d.root.position.x, player.pos.z - d.root.position.z);
+    if (distSee || (hear && dist < 22)) {
+      d.alert = 3.5;
+      d.lastSeen = { x: player.pos.x, z: player.pos.z };
+    } else {
+      d.alert = Math.max(0, d.alert - dt);
+    }
+    if (d.alert > 0 && distSee && distSee < 15) candidates.push({ d, dist: distSee });
+    if (d.alert <= 0) d.state = "patrol";
+    else if (distSee && distSee < 15) d.state = "shoot";
+    else d.state = "cover";
+  }
+  candidates.sort((a, b) => a.dist - b.dist);
+  const allowed = new Set(candidates.slice(0, 2).map((c) => c.d));
+
+  for (const d of dummies) {
+    if (d.state === "down") continue;
+    if (d.state === "patrol") {
+      d.crouch = false;
+      const wp = d.waypoints[d.wp];
+      if (moveBot(d, wp.x, wp.z, 2.1, dt)) d.wp = (d.wp + 1) % d.waypoints.length;
+      continue;
     }
     const dx = player.pos.x - d.root.position.x;
     const dz = player.pos.z - d.root.position.z;
-    d.root.rotation.y = damp(d.root.rotation.y, Math.atan2(dx, dz), 3.2, dt);
+    const want = Math.atan2(dx, dz);
+    if (d.state === "cover") {
+      const pt = coverPointFor(d) || d.lastSeen;
+      if (pt) moveBot(d, pt.x, pt.z, 3.6, dt);
+      const o = (() => {
+        let best = null, bestD = 0.95;
+        for (const ob of obstacles) {
+          if (!lowCover(ob)) continue;
+          const cx = clamp(d.root.position.x, ob.minX, ob.maxX);
+          const cz = clamp(d.root.position.z, ob.minZ, ob.maxZ);
+          const dd = Math.hypot(d.root.position.x - cx, d.root.position.z - cz);
+          if (dd < bestD) { bestD = dd; best = ob; }
+        }
+        return best;
+      })();
+      d.crouch = !!o;
+      if (o) d.root.rotation.y = dampAngle(d.root.rotation.y, want, 6, dt);
+      continue;
+    }
+    // shoot
+    const cover = coverPointFor(d);
+    const dist = Math.hypot(dx, dz);
+    if (cover && dist > 7) {
+      const arrived = moveBot(d, cover.x, cover.z, 3.8, dt);
+      d.crouch = arrived;
+    } else {
+      d.crouch = !!findNearbyCover && (() => {
+        for (const ob of obstacles) {
+          if (!lowCover(ob)) continue;
+          const cx = clamp(d.root.position.x, ob.minX, ob.maxX);
+          const cz = clamp(d.root.position.z, ob.minZ, ob.maxZ);
+          if (Math.hypot(d.root.position.x - cx, d.root.position.z - cz) < 0.95) return true;
+        }
+        return false;
+      })();
+    }
+    d.root.rotation.y = dampAngle(d.root.rotation.y, want, 8, dt);
+    if (gameActive() && allowed.has(d) && d.shootCd <= 0 && botSeePlayer(d)) {
+      enemyFire(d);
+      d.shootCd = 0.85 + Math.random() * 0.35;
+    }
   }
 }
 
@@ -1389,6 +1635,8 @@ function updateHud() {
   crossEl.classList.toggle("hit", hitFlash > 0);
   const ch = document.getElementById("coverHint");
   if (ch) ch.classList.toggle("on", !!player.inCover);
+  const hpBar = document.getElementById("hpBar");
+  if (hpBar) hpBar.style.transform = "scaleX(" + clamp(player.hp / player.maxHp, 0, 1) + ")";
 }
 
 function frame() {
@@ -1398,6 +1646,9 @@ function frame() {
     updateMove(dt);
     updateCover(dt);
     updateShoot(dt);
+    if (player.hp < player.maxHp && performance.now() - player.lastHit > 4000) {
+      player.hp = Math.min(player.maxHp, player.hp + 12 * dt);
+    }
   }
   updateDummies(dt);
   updateSoldier(dt);
