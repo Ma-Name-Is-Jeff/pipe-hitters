@@ -60,10 +60,17 @@
     #fail.hidden { display: none; }
     #fail h2 { letter-spacing: 0.28em; font-size: clamp(22px, 5vw, 36px); margin-bottom: 10px; }
     #fail p { opacity: 0.8; margin-bottom: 16px; }
-    #fail button {
+    #fail button, #done button {
       padding: 12px 22px; border-radius: 8px; border: 1px solid rgba(243, 193, 74, 0.45);
       background: rgba(243, 193, 74, 0.2); color: #e8dcc8; font-size: 15px; cursor: pointer;
     }
+    #done {
+      position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      background: rgba(8, 10, 9, 0.78); pointer-events: auto; z-index: 8; text-align: center; padding: 24px;
+    }
+    #done.hidden { display: none; }
+    #done h2 { letter-spacing: 0.28em; font-size: clamp(22px, 5vw, 36px); margin-bottom: 10px; }
+    #done .stats { list-style: none; margin: 0 0 18px; padding: 0; opacity: 0.9; font-variant-numeric: tabular-nums; line-height: 1.7; }
     #hint {
       position: absolute; left: 20px; bottom: 20px; font-size: 12px; line-height: 1.55; opacity: 0.72;
       text-shadow: 0 1px 2px #000; max-width: 300px;
@@ -138,6 +145,15 @@
       <h2>DOWN</h2>
       <p>You were dropped in the yard. Try again from the start.</p>
       <button id="btnRetry" type="button">Try again</button>
+    </div>
+    <div id="done" class="hidden">
+      <h2>YARD CLEAR</h2>
+      <ul class="stats">
+        <li>Kills: <span id="statKills">0</span></li>
+        <li>Accuracy: <span id="statAcc">0</span>%</li>
+        <li>Time: <span id="statTime">0.0</span>s</li>
+      </ul>
+      <button id="btnAgain" type="button">Play again</button>
     </div>
     <div id="pause" class="hidden">
       <div class="panel">
@@ -657,7 +673,35 @@ function resetMission() {
   stats.kills = 0; stats.shots = 0; stats.hits = 0;
   stats.start = performance.now();
   document.getElementById("fail").classList.add("hidden");
+  document.getElementById("done").classList.add("hidden");
   for (const d of dummies) resetBot(d);
+}
+
+function formatTime(s) {
+  const m = Math.floor(s / 60);
+  const r = s - m * 60;
+  return m > 0 ? (m + ":" + r.toFixed(1).padStart(4, "0")) : r.toFixed(1);
+}
+
+function completeMission() {
+  if (missionOver) return;
+  missionOver = true;
+  const elapsed = Math.max(0, (performance.now() - stats.start) / 1000);
+  const acc = stats.shots ? Math.round(100 * stats.hits / stats.shots) : 0;
+  document.getElementById("statKills").textContent = String(stats.kills);
+  document.getElementById("statAcc").textContent = String(acc);
+  document.getElementById("statTime").textContent = formatTime(elapsed);
+  document.getElementById("done").classList.remove("hidden");
+  if (document.pointerLockElement) document.exitPointerLock();
+  mouse.down = false;
+  syncUi();
+}
+
+function checkVictory() {
+  if (missionOver || !playing || paused) return;
+  if (player.hp <= 0) return;
+  if (!dummies.length) return;
+  if (dummies.every((d) => d.state === "down")) completeMission();
 }
 
 function failMission() {
@@ -728,6 +772,12 @@ startEl.addEventListener("touchstart", (e) => {
 btnPause.addEventListener("click", (e) => { e.stopPropagation(); if (playing) setPaused(true); });
 btnResume.addEventListener("click", (e) => { e.stopPropagation(); setPaused(false); });
 document.getElementById("btnRetry").addEventListener("click", (e) => {
+  e.stopPropagation();
+  resetMission();
+  setPaused(false);
+  if (!isTop() && !touchMode) canvas.requestPointerLock();
+});
+document.getElementById("btnAgain").addEventListener("click", (e) => {
   e.stopPropagation();
   resetMission();
   setPaused(false);
@@ -1651,6 +1701,7 @@ function frame() {
     }
   }
   updateDummies(dt);
+  checkVictory();
   updateSoldier(dt);
   updateCamera(dt);
   updateFx(dt);
