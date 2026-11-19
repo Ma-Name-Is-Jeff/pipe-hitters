@@ -40,6 +40,12 @@
     }
     #ammo span { opacity: 0.55; font-size: 15px; }
     #ammo.reloading { opacity: 0.55; }
+    #coverHint {
+      position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%);
+      letter-spacing: 0.18em; font-size: 13px; opacity: 0; text-shadow: 0 1px 2px #000;
+      transition: opacity 0.15s linear;
+    }
+    #coverHint.on { opacity: 0.9; }
     #hint {
       position: absolute; left: 20px; bottom: 20px; font-size: 12px; line-height: 1.55; opacity: 0.72;
       text-shadow: 0 1px 2px #000; max-width: 300px;
@@ -91,6 +97,7 @@
     <div id="hud">
       <div id="crosshair" class="hidden"><i class="h"></i><i class="v"></i></div>
       <div id="ammo">30 <span>/ 90</span></div>
+      <div id="coverHint">COVER</div>
       <div id="hint">
         WASD move · Mouse aim · Click shoot<br />
         Shift sprint · Space vault · C / Ctrl slide · R reload<br />
@@ -209,6 +216,9 @@ const player = {
   reloadT: 0,
   lastShot: -1,
   bob: 0,
+  crouch: false,
+  inCover: false,
+  coverDR: 1,
 };
 
 const cam = {
@@ -763,7 +773,7 @@ function findAssistTarget() {
     while (a > Math.PI) a -= Math.PI * 2;
     while (a < -Math.PI) a += Math.PI * 2;
     if (Math.abs(a) > AIM_CONE) continue;
-    if (segmentHitsCover(player.pos.x, player.pos.z, d.root.position.x, d.root.position.z, 1.2)) continue;
+    if (losBlocked(player.pos.x, player.pos.z, d.root.position.x, d.root.position.z)) continue;
     const score = Math.abs(a) * 4 + dist * 0.08;
     if (score < bestScore) { bestScore = score; best = d; }
   }
@@ -835,6 +845,59 @@ function blockedAt(x, z, rad) {
     if (dx * dx + dz * dz < rad * rad * 0.85) return true;
   }
   return false;
+}
+
+function tallObstacle(o) { return o.h >= 1.2; }
+function lowCover(o) { return o.h >= 0.45 && o.h <= 1.2; }
+
+function losBlocked(ax, az, bx, bz) {
+  const dx = bx - ax, dz = bz - az;
+  const len = Math.hypot(dx, dz);
+  if (len < 0.08) return false;
+  const origin = { x: ax, y: 1.35, z: az };
+  const dir = { x: dx / len, y: 0, z: dz / len };
+  let best = len - 0.15;
+  for (const o of obstacles) {
+    if (!tallObstacle(o)) continue;
+    const invX = 1 / (dir.x || 1e-8), invY = 1 / (dir.y || 1e-8), invZ = 1 / (dir.z || 1e-8);
+    let t1 = (o.minX - origin.x) * invX, t2 = (o.maxX - origin.x) * invX;
+    let tmin = Math.min(t1, t2), tmax = Math.max(t1, t2);
+    t1 = (0 - origin.y) * invY; t2 = (o.h - origin.y) * invY;
+    tmin = Math.max(tmin, Math.min(t1, t2));
+    tmax = Math.min(tmax, Math.max(t1, t2));
+    t1 = (o.minZ - origin.z) * invZ; t2 = (o.maxZ - origin.z) * invZ;
+    tmin = Math.max(tmin, Math.min(t1, t2));
+    tmax = Math.min(tmax, Math.max(t1, t2));
+    if (tmax >= tmin && tmin > 0.08 && tmin < best) return true;
+  }
+  return false;
+}
+
+function findNearbyCover() {
+  let best = null, bestD = 0.95;
+  for (const o of obstacles) {
+    if (!lowCover(o)) continue;
+    const cx = clamp(player.pos.x, o.minX, o.maxX);
+    const cz = clamp(player.pos.z, o.minZ, o.maxZ);
+    const d = Math.hypot(player.pos.x - cx, player.pos.z - cz);
+    if (d < bestD) { bestD = d; best = o; }
+  }
+  return best;
+}
+
+function updateCover(dt) {
+  if (player.stance === "slide" || player.vault) {
+    player.crouch = false;
+    player.inCover = false;
+    player.coverDR = 1;
+    return;
+  }
+  const cover = findNearbyCover();
+  const spd = Math.hypot(player.vel.x, player.vel.z);
+  const wantCrouch = !!cover && spd < 4.2;
+  player.crouch = wantCrouch;
+  player.inCover = !!(cover && player.crouch);
+  player.coverDR = player.inCover ? 0.45 : 1;
 }
 
 function findVault(dirx, dirz) {
@@ -1123,7 +1186,7 @@ function fire() {
 
   let origin, dir;
   if (isTop()) {
-    origin = tmp.q.set(player.pos.x, 1.15, player.pos.z);
+    origin = tmp.q.set(player.pos.x, player.crouch ? 0.72 : 1.15, player.pos.z);
     dir = tmp.v.set(Math.sin(player.yaw), -0.02, Math.cos(player.yaw)).normalize();
   } else {
     origin = camera.position;
@@ -1250,6 +1313,13 @@ function updateSoldier(dt) {
     soldier.rotation.x = -0.2 * Math.sin(k * Math.PI);
     u.lLeg.rotation.x = -0.8;
     u.rLeg.rotation.x = 0.5;
+  } else if (player.crouch) {
+    soldier.rotation.x = 0.12;
+    soldier.position.y = -0.28;
+    u.lLeg.rotation.x = 0.55;
+    u.rLeg.rotation.x = 0.55;
+    u.gun.rotation.x = 0.08;
+    u.torso.position.y = 1.02;
   } else {
     soldier.rotation.x = 0;
     const bob = Math.sin(player.bob * 2 * Math.PI) * Math.min(1, spd / 5);
@@ -1317,6 +1387,8 @@ function updateHud() {
     ? `REL <span>${player.reloadT.toFixed(1)}s</span>`
     : `${player.mag} <span>/ ${player.reserve}</span>`;
   crossEl.classList.toggle("hit", hitFlash > 0);
+  const ch = document.getElementById("coverHint");
+  if (ch) ch.classList.toggle("on", !!player.inCover);
 }
 
 function frame() {
@@ -1324,6 +1396,7 @@ function frame() {
   if (gameActive()) {
     updateLook(dt);
     updateMove(dt);
+    updateCover(dt);
     updateShoot(dt);
   }
   updateDummies(dt);
