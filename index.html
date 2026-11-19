@@ -38,8 +38,16 @@
       position: absolute; right: 28px; bottom: 28px; font-variant-numeric: tabular-nums; letter-spacing: 0.08em;
       font-size: 22px; text-shadow: 0 1px 2px #000;
     }
-    #ammo span { opacity: 0.55; font-size: 15px; }
+    #ammo span { opacity: 0.8; font-size: 15px; }
     #ammo.reloading { opacity: 0.55; }
+    #ammo.low { color: #f3c14a; }
+    #ammo.dry { color: #e07058; }
+    #ammoWarn {
+      position: absolute; right: 28px; bottom: 58px; font-size: 12px; letter-spacing: 0.16em;
+      opacity: 0; color: #f3c14a; text-shadow: 0 1px 2px #000; pointer-events: none;
+    }
+    #ammoWarn.on { opacity: 1; }
+    #ammoWarn.dry { color: #e07058; }
     #coverHint {
       position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%);
       letter-spacing: 0.18em; font-size: 13px; opacity: 0; text-shadow: 0 1px 2px #000;
@@ -82,7 +90,7 @@
       pointer-events: auto; z-index: 6; cursor: pointer;
     }
     #pause .panel {
-      width: min(420px, 92%); background: rgba(18, 22, 20, 0.94); border: 1px solid rgba(232, 220, 200, 0.22);
+      width: min(420px, 92%); max-height: 90%; overflow-y: auto; background: rgba(18, 22, 20, 0.94); border: 1px solid rgba(232, 220, 200, 0.22);
       border-radius: 14px; padding: 22px 20px 18px; text-align: left;
     }
     #pause button, #pause .tog {
@@ -122,7 +130,8 @@
     <canvas id="c"></canvas>
     <div id="hud">
       <div id="crosshair" class="hidden"><i class="h"></i><i class="v"></i></div>
-      <div id="ammo">30 <span>/ 90</span></div>
+      <div id="ammo">30 <span>/ 180</span></div>
+      <div id="ammoWarn">LOW AMMO</div>
       <div id="coverHint">COVER</div>
       <div id="hpWrap"><div id="hpBar"></div></div>
       <div id="hint">
@@ -170,6 +179,12 @@
         <label class="slider">First-person look <span id="fpsSensVal">45</span>
           <input type="range" id="optFpsSens" min="20" max="200" value="45" />
         </label>
+        <label class="slider">Aim assist strength <span id="assistVal">70</span>
+          <input type="range" id="optAssist" min="0" max="100" value="70" />
+        </label>
+        <label class="slider">Volume <span id="volumeVal">70</span>
+          <input type="range" id="optVolume" min="0" max="100" value="70" />
+        </label>
       </div>
     </div>
   </div>
@@ -190,8 +205,13 @@ const optLandscape = document.getElementById("optLandscape");
 const optInvert = document.getElementById("optInvert");
 const optAimSens = document.getElementById("optAimSens");
 const optFpsSens = document.getElementById("optFpsSens");
+const optAssist = document.getElementById("optAssist");
+const optVolume = document.getElementById("optVolume");
 const aimSensVal = document.getElementById("aimSensVal");
 const fpsSensVal = document.getElementById("fpsSensVal");
+const assistVal = document.getElementById("assistVal");
+const volumeVal = document.getElementById("volumeVal");
+const ammoWarn = document.getElementById("ammoWarn");
 const ammoEl = document.getElementById("ammo");
 const crossEl = document.getElementById("crosshair");
 const hintEl = document.getElementById("hint");
@@ -209,8 +229,8 @@ const RESERVE_MAX = 90;
 const FIRE_MS = 95;
 const RELOAD_S = 1.45;
 const WEAPONS = [
-  { name: "Line Carbine", short: "CARBINE", mag: 30, reserve: 90, fireMs: 95, reload: 1.45, pellets: 1, spread: 0.012, range: 80 },
-  { name: "Hall Sweeper", short: "SWEEPER", mag: 6, reserve: 24, fireMs: 520, reload: 1.85, pellets: 6, spread: 0.16, range: 11 },
+  { name: "Line Carbine", short: "CARBINE", mag: 30, reserve: 180, maxReserve: 240, fireMs: 95, reload: 1.45, pellets: 1, spread: 0.005, range: 80, burst: 3, burstGap: 0.34 },
+  { name: "Hall Sweeper", short: "SWEEPER", mag: 6, reserve: 36, maxReserve: 60, fireMs: 520, reload: 1.85, pellets: 6, spread: 0.09, range: 11, burst: 1, burstGap: 0 },
 ];
 const WALK = 5.6;
 const SPRINT = 8.6;
@@ -232,7 +252,7 @@ const AIM_SPEED = 0.5;
 const STORE = "pipe-hitters-settings";
 const FPS_LOOK_BASE = 0.00085;
 
-const settings = { camera: "top", invertMove: false, landscape: false, aimSens: 70, fpsSens: 45 };
+const settings = { camera: "top", invertMove: false, landscape: false, aimSens: 70, fpsSens: 45, assist: 70, volume: 70 };
 try {
   const saved = JSON.parse(localStorage.getItem(STORE) || "null");
   if (saved && typeof saved === "object") Object.assign(settings, saved);
@@ -247,8 +267,12 @@ let playing = false;
 let paused = false;
 let cssLandscape = false;
 let assistTarget = null;
+let stickyAssist = null;
 let recentlyShot = 0;
 let missionOver = false;
+let aimBloom = 1;
+let prevYaw = Math.PI;
+let lastEmpty = 0;
 const stats = { kills: 0, shots: 0, hits: 0, start: 0 };
 
 const player = {
@@ -261,14 +285,16 @@ const player = {
   slideT: 0,
   vault: null,
   mag: MAG,
-  reserve: RESERVE_MAX,
+  reserve: 180,
   reloadT: 0,
   wep: 0,
   guns: [
-    { mag: 30, reserve: 90, reloadT: 0 },
-    { mag: 6, reserve: 24, reloadT: 0 },
+    { mag: 30, reserve: 180, reloadT: 0 },
+    { mag: 6, reserve: 36, reloadT: 0 },
   ],
   lastShot: -1,
+  burstCount: 0,
+  burstWait: 0,
   bob: 0,
   crouch: false,
   inCover: false,
@@ -438,15 +464,181 @@ const coneMat = new THREE.MeshBasicMaterial({
   depthWrite: false, side: THREE.DoubleSide,
 });
 const aimCone = new THREE.Mesh(coneGeo, coneMat);
-const aimLine = new THREE.Mesh(
-  new THREE.BoxGeometry(0.06, 0.03, coneLen),
-  new THREE.MeshBasicMaterial({ color: 0xf0e0b8, transparent: true, opacity: 0.32, depthWrite: false })
+const aimLineMat = new THREE.MeshBasicMaterial({ color: 0xffe08a, transparent: true, opacity: 0.85, depthWrite: false });
+const aimLine = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.04, coneLen), aimLineMat);
+aimLine.position.set(0, 0.07, coneLen * 0.5);
+const aimCore = new THREE.Mesh(
+  new THREE.BoxGeometry(0.025, 0.05, coneLen),
+  new THREE.MeshBasicMaterial({ color: 0xfff6d0, transparent: true, opacity: 0.95, depthWrite: false })
 );
-aimLine.position.set(0, 0.05, coneLen * 0.5);
+aimCore.position.set(0, 0.08, coneLen * 0.5);
 const aimRig = new THREE.Group();
-aimRig.add(aimCone, aimLine);
+aimRig.add(aimCone, aimLine, aimCore);
 aimRig.visible = false;
 scene.add(aimRig);
+
+let audioCtx = null;
+function unlockAudio() {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  if (!audioCtx) audioCtx = new AC();
+  if (audioCtx.state === "suspended") audioCtx.resume();
+}
+function masterVol() { return clamp((settings.volume || 0) / 100, 0, 1); }
+function noiseBuf(dur) {
+  const sr = audioCtx.sampleRate, n = Math.max(1, Math.floor(sr * dur));
+  const buf = audioCtx.createBuffer(1, n, sr);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+  return buf;
+}
+function playTone(freq, dur, type, gain, freqEnd) {
+  if (!audioCtx) return;
+  const t0 = audioCtx.currentTime;
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(freq, t0);
+  if (freqEnd) o.frequency.exponentialRampToValueAtTime(Math.max(40, freqEnd), t0 + dur);
+  g.gain.setValueAtTime(gain * masterVol(), t0);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start(t0); o.stop(t0 + dur + 0.02);
+}
+function playNoise(dur, gain, hpHz, lpHz) {
+  if (!audioCtx) return;
+  const t0 = audioCtx.currentTime;
+  const src = audioCtx.createBufferSource();
+  src.buffer = noiseBuf(dur);
+  const hp = audioCtx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = hpHz;
+  const lp = audioCtx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = lpHz;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(gain * masterVol(), t0);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  src.connect(hp); hp.connect(lp); lp.connect(g); g.connect(audioCtx.destination);
+  src.start(t0);
+}
+function playShot(kind, dist) {
+  if (!audioCtx || masterVol() <= 0) return;
+  const att = dist != null ? 1 / (1 + dist * 0.14) : 1;
+  if (kind === "sweeper") {
+    playNoise(0.14, 0.42 * att, 180, 1800);
+    playTone(92, 0.16, "sine", 0.38 * att, 48);
+    playTone(210, 0.05, "square", 0.08 * att, 90);
+  } else if (kind === "enemy") {
+    playNoise(0.06, 0.12 * att, 400, 2200);
+    playTone(130, 0.08, "sine", 0.12 * att, 60);
+  } else {
+    playNoise(0.07, 0.32 * att, 500, 3200);
+    playTone(140, 0.1, "sine", 0.28 * att, 70);
+    playTone(380, 0.035, "square", 0.06 * att, 160);
+  }
+}
+function playReload() {
+  if (!audioCtx || masterVol() <= 0) return;
+  playTone(420, 0.04, "square", 0.07, 280);
+  setTimeout(() => { playTone(240, 0.06, "square", 0.06, 140); playNoise(0.05, 0.08, 200, 1200); }, 180);
+}
+function playEmpty() {
+  if (!audioCtx || masterVol() <= 0) return;
+  const now = performance.now();
+  if (now - lastEmpty < 220) return;
+  lastEmpty = now;
+  playTone(190, 0.045, "square", 0.07, 120);
+}
+function playHit() {
+  if (!audioCtx || masterVol() <= 0) return;
+  playNoise(0.04, 0.14, 300, 1600);
+  playTone(220, 0.05, "sine", 0.08, 80);
+}
+function playPickup() {
+  if (!audioCtx || masterVol() <= 0) return;
+  playTone(520, 0.05, "sine", 0.09, 780);
+  playTone(780, 0.08, "sine", 0.06, 980);
+}
+
+const ammoPickups = [];
+function makeAmmoMesh(scale, color) {
+  const g = new THREE.Group();
+  const box = boxMesh(0.48 * scale, 0.28 * scale, 0.48 * scale, color, 0, 0.16 * scale, 0);
+  const plusH = boxMesh(0.18 * scale, 0.08 * scale, 0.34 * scale, 0xf3c14a, 0, 0.36 * scale, 0);
+  const plusV = boxMesh(0.34 * scale, 0.08 * scale, 0.18 * scale, 0xf3c14a, 0, 0.36 * scale, 0);
+  plusH.material = new THREE.MeshBasicMaterial({ color: 0xf3c14a });
+  plusV.material = new THREE.MeshBasicMaterial({ color: 0xf3c14a });
+  g.add(box, plusH, plusV);
+  return g;
+}
+function spawnAmmoPickup(x, z, opts) {
+  const mesh = makeAmmoMesh(opts.drop ? 0.72 : 1, opts.drop ? 0xc4a45a : 0x6e5a32);
+  mesh.position.set(x, 0, z);
+  scene.add(mesh);
+  const p = {
+    mesh, x, z, kind: opts.kind || "crate",
+    carbine: opts.carbine, sweeper: opts.sweeper,
+    respawn: opts.respawn || 0, wait: 0, live: true,
+    bob: Math.random() * 6, drop: !!opts.drop,
+  };
+  ammoPickups.push(p);
+  return p;
+}
+function addReserve(wepIndex, amount) {
+  const cap = WEAPONS[wepIndex].maxReserve;
+  if (player.wep === wepIndex) player.reserve = Math.min(cap, player.reserve + amount);
+  else player.guns[wepIndex].reserve = Math.min(cap, player.guns[wepIndex].reserve + amount);
+}
+function giveAmmoPack(carbine, sweeper) {
+  addReserve(0, carbine);
+  addReserve(1, sweeper);
+  playPickup();
+}
+function isAmmoFull() {
+  const c = player.wep === 0 ? player.reserve : player.guns[0].reserve;
+  const s = player.wep === 1 ? player.reserve : player.guns[1].reserve;
+  return c >= WEAPONS[0].maxReserve && s >= WEAPONS[1].maxReserve;
+}
+function clearDroppedAmmo() {
+  for (let i = ammoPickups.length - 1; i >= 0; i--) {
+    const p = ammoPickups[i];
+    if (!p.drop) continue;
+    scene.remove(p.mesh);
+    ammoPickups.splice(i, 1);
+  }
+}
+function resetAmmoCrates() {
+  clearDroppedAmmo();
+  for (const p of ammoPickups) {
+    p.live = true;
+    p.wait = 0;
+    p.mesh.visible = true;
+    p.mesh.position.set(p.x, 0, p.z);
+  }
+}
+function updatePickups(dt) {
+  for (const p of ammoPickups) {
+    if (!p.live) {
+      if (p.respawn > 0) {
+        p.wait -= dt;
+        if (p.wait <= 0) { p.live = true; p.mesh.visible = true; }
+      }
+      continue;
+    }
+    p.bob += dt * 2.4;
+    p.mesh.position.y = 0.02 + Math.sin(p.bob) * 0.06;
+    p.mesh.rotation.y += dt * 0.9;
+    if (!gameActive()) continue;
+    if (isAmmoFull()) continue;
+    const d = Math.hypot(player.pos.x - p.mesh.position.x, player.pos.z - p.mesh.position.z);
+    if (d > 1.05) continue;
+    giveAmmoPack(p.carbine, p.sweeper);
+    p.mesh.visible = false;
+    p.live = false;
+    if (p.drop) { scene.remove(p.mesh); p.respawn = 0; }
+    else p.wait = p.respawn;
+  }
+  for (let i = ammoPickups.length - 1; i >= 0; i--) {
+    if (ammoPickups[i].drop && !ammoPickups[i].live) ammoPickups.splice(i, 1);
+  }
+}
 
 function makeDummy(x, z, facing) {
   const root = makeSoldier(0xb45a34, 0x6a3a28, 0xe2c9a8, 0x2a2420);
@@ -480,6 +672,13 @@ makeDummy(-10.5, 8.2, 2.4);
 makeDummy(14.0, -8.0, 1.0);
 makeDummy(-2.0, -14.0, 0.1);
 makeDummy(7.5, 12.0, 3.2);
+
+spawnAmmoPickup(0.2, 5.4, { carbine: 40, sweeper: 8, respawn: 18 });
+spawnAmmoPickup(8.0, -6.2, { carbine: 40, sweeper: 8, respawn: 20 });
+spawnAmmoPickup(-9.2, 0.6, { carbine: 40, sweeper: 8, respawn: 18 });
+spawnAmmoPickup(14.2, 2.2, { carbine: 40, sweeper: 8, respawn: 22 });
+spawnAmmoPickup(-3.6, -10.2, { carbine: 40, sweeper: 8, respawn: 19 });
+
 
 for (let i = 0; i < 18; i++) {
   const m = new THREE.Mesh(
@@ -558,8 +757,12 @@ function syncUi() {
   optInvert.textContent = "Invert move stick: " + (settings.invertMove ? "On" : "Off");
   optAimSens.value = String(settings.aimSens);
   optFpsSens.value = String(settings.fpsSens);
+  optAssist.value = String(settings.assist);
+  optVolume.value = String(settings.volume);
   aimSensVal.textContent = String(settings.aimSens);
   fpsSensVal.textContent = String(settings.fpsSens);
+  assistVal.textContent = String(settings.assist);
+  volumeVal.textContent = String(settings.volume);
   document.body.classList.toggle("top-down", isTop());
   document.body.classList.toggle("fps", !isTop());
   crossEl.classList.toggle("hidden", isTop() || !playing || paused);
@@ -674,12 +877,17 @@ function resetMission() {
   player.slideT = 0;
   player.wep = 0;
   player.guns = [
-    { mag: 30, reserve: 90, reloadT: 0 },
-    { mag: 6, reserve: 24, reloadT: 0 },
+    { mag: 30, reserve: 180, reloadT: 0 },
+    { mag: 6, reserve: 36, reloadT: 0 },
   ];
   player.mag = 30;
-  player.reserve = 90;
+  player.reserve = 180;
   player.reloadT = 0;
+  player.burstCount = 0;
+  player.burstWait = 0;
+  aimBloom = 1;
+  stickyAssist = null;
+  resetAmmoCrates();
   player.hp = player.maxHp;
   player.lastHit = -99;
   player.crouch = false;
@@ -732,6 +940,7 @@ function failMission() {
 }
 
 function startPlay() {
+  unlockAudio();
   if (isTouchDevice() || touchMode) showTouch(true);
   resetMission();
   setPlaying(true);
@@ -818,6 +1027,16 @@ optAimSens.addEventListener("input", () => {
 });
 optFpsSens.addEventListener("input", () => {
   settings.fpsSens = Number(optFpsSens.value);
+  saveSettings();
+  syncUi();
+});
+optAssist.addEventListener("input", () => {
+  settings.assist = Number(optAssist.value);
+  saveSettings();
+  syncUi();
+});
+optVolume.addEventListener("input", () => {
+  settings.volume = Number(optVolume.value);
   saveSettings();
   syncUi();
 });
@@ -908,6 +1127,7 @@ touchEl.addEventListener("touchmove", onTouchMove, { passive: false });
 touchEl.addEventListener("touchend", onTouchEnd);
 touchEl.addEventListener("touchcancel", onTouchEnd);
 
+window.addEventListener("pointerdown", unlockAudio, { once: false });
 bindKeys();
 
 function isAiming() {
@@ -927,25 +1147,50 @@ function segmentHitsCover(ax, az, bx, bz, maxH) {
   return true;
 }
 
+function targetAngleOff(d) {
+  const dx = d.root.position.x - player.pos.x;
+  const dz = d.root.position.z - player.pos.z;
+  let a = Math.atan2(dx, dz) - player.yaw;
+  while (a > Math.PI) a -= Math.PI * 2;
+  while (a < -Math.PI) a += Math.PI * 2;
+  return { a, dist: Math.hypot(dx, dz), dx, dz };
+}
+
+function assistStillValid(d, breakCone) {
+  if (!d || d.state === "down") return false;
+  const off = targetAngleOff(d);
+  if (off.dist < 0.5 || off.dist > AIM_RANGE * 1.08) return false;
+  if (Math.abs(off.a) > breakCone) return false;
+  if (losBlocked(player.pos.x, player.pos.z, d.root.position.x, d.root.position.z)) return false;
+  if (touchMode && aimStick.mag > 0.72) {
+    const stickAng = Math.atan2(aimStick.x, aimStick.y);
+    let da = stickAng - Math.atan2(off.dx, off.dz);
+    while (da > Math.PI) da -= Math.PI * 2;
+    while (da < -Math.PI) da += Math.PI * 2;
+    if (Math.abs(da) > AIM_CONE * 1.6) return false;
+  }
+  return true;
+}
+
 function findAssistTarget() {
-  if (isTop() && touchMode && aimStick.mag <= AIM_DEAD) return null;
-  const dirx = Math.sin(player.yaw), dirz = Math.cos(player.yaw);
+  const strength = assistMul();
+  if (strength <= 0.01) { stickyAssist = null; return null; }
+  if (isTop() && touchMode && aimStick.mag <= AIM_DEAD) { stickyAssist = null; return null; }
+  const cone = AIM_CONE * (0.75 + 0.35 * strength);
+  const breakCone = cone * 1.85;
+  if (assistStillValid(stickyAssist, breakCone)) return stickyAssist;
   let best = null, bestScore = 1e9;
   for (const d of dummies) {
     if (d.state === "down") continue;
-    const dx = d.root.position.x - player.pos.x;
-    const dz = d.root.position.z - player.pos.z;
-    const dist = Math.hypot(dx, dz);
-    if (dist < 0.5 || dist > AIM_RANGE) continue;
-    const ang = Math.atan2(dx, dz) - player.yaw;
-    let a = ang;
-    while (a > Math.PI) a -= Math.PI * 2;
-    while (a < -Math.PI) a += Math.PI * 2;
-    if (Math.abs(a) > AIM_CONE) continue;
+    const off = targetAngleOff(d);
+    if (off.dist < 0.5 || off.dist > AIM_RANGE) continue;
+    if (Math.abs(off.a) > cone) continue;
     if (losBlocked(player.pos.x, player.pos.z, d.root.position.x, d.root.position.z)) continue;
-    const score = Math.abs(a) * 4 + dist * 0.08;
+    const close = 1 - clamp(off.dist / AIM_RANGE, 0, 1);
+    const score = Math.abs(off.a) * 3.2 + off.dist * 0.05 - close * 0.35;
     if (score < bestScore) { bestScore = score; best = d; }
   }
+  stickyAssist = best;
   return best;
 }
 
@@ -1135,6 +1380,8 @@ function swapWeapon(index) {
   player.mag = g.mag;
   player.reserve = g.reserve;
   player.reloadT = g.reloadT;
+  player.burstCount = 0;
+  player.burstWait = 0;
 }
 
 function cycleWeapon() { swapWeapon(1 - player.wep); }
@@ -1143,6 +1390,22 @@ function startReload() {
   const w = currentWep();
   if (!gameActive() || player.reloadT > 0 || player.mag >= w.mag || player.reserve <= 0) return;
   player.reloadT = w.reload;
+  playReload();
+}
+
+function assistMul() { return clamp((settings.assist || 0) / 100, 0, 1); }
+
+function moveTowardAngle(cur, target, maxStep) {
+  let d = target - cur;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  if (Math.abs(d) <= maxStep) return cur + d;
+  return cur + Math.sign(d) * maxStep;
+}
+
+function stickAimCurve(mag) {
+  const t = clamp((mag - AIM_DEAD) / (1 - AIM_DEAD), 0, 1);
+  return t * t;
 }
 
 function applyFriction(dt, amount) {
@@ -1175,13 +1438,27 @@ function aimFromGround() {
   return null;
 }
 
+function updateBloom(dt) {
+  const spd = Math.hypot(player.vel.x, player.vel.z);
+  let dy = player.yaw - prevYaw;
+  while (dy > Math.PI) dy -= Math.PI * 2;
+  while (dy < -Math.PI) dy += Math.PI * 2;
+  const turning = Math.abs(dy) > 0.35 * dt;
+  const busy = spd > 1.15 || turning || recentlyShot > 0 || player.stance === "slide" || player.vault;
+  if (busy) aimBloom = Math.min(1, aimBloom + dt * (recentlyShot > 0 ? 2.4 : 1.7));
+  else aimBloom = Math.max(0, aimBloom - dt / 0.4);
+  prevYaw = player.yaw;
+}
+
 function updateLook(dt) {
   const turn = 10 * aimMul();
   if (isTop()) {
     if (touchMode) {
       if (aimStick.mag > AIM_DEAD) {
         const target = Math.atan2(aimStick.x, aimStick.y);
-        player.yaw = dampAngle(player.yaw, target, turn, dt);
+        const curve = stickAimCurve(aimStick.mag);
+        const rate = (0.7 + 6.8 * curve) * aimMul();
+        player.yaw = moveTowardAngle(player.yaw, target, rate * dt);
       }
     } else {
       const yaw = aimFromGround();
@@ -1189,17 +1466,19 @@ function updateLook(dt) {
     }
     assistTarget = findAssistTarget();
     if (assistTarget && isAiming()) {
-      const dx = assistTarget.root.position.x - player.pos.x;
-      const dz = assistTarget.root.position.z - player.pos.z;
-      player.yaw = dampAngle(player.yaw, Math.atan2(dx, dz), 7 * aimMul(), dt);
+      const off = targetAngleOff(assistTarget);
+      const close = 1 - clamp(off.dist / AIM_RANGE, 0, 1);
+      const snap = (6 + 10 * close) * assistMul() * (0.55 + 0.45 * aimMul());
+      player.yaw = dampAngle(player.yaw, Math.atan2(off.dx, off.dz), snap, dt);
       aimPoint.set(assistTarget.root.position.x, 0.03, assistTarget.root.position.z);
     } else {
       aimPoint.set(
-        player.pos.x + Math.sin(player.yaw) * Math.min(AIM_RANGE, 8),
+        player.pos.x + Math.sin(player.yaw) * Math.min(AIM_RANGE, 10),
         0.03,
-        player.pos.z + Math.cos(player.yaw) * Math.min(AIM_RANGE, 8)
+        player.pos.z + Math.cos(player.yaw) * Math.min(AIM_RANGE, 10)
       );
     }
+    updateBloom(dt);
     player.pitch = damp(player.pitch, 0.08, 8, dt);
     return;
   }
@@ -1354,6 +1633,7 @@ function hurtDummy(dum) {
   dum.hp -= 1;
   dum.flash = 0.12;
   hitFlash = 0.09;
+  playHit();
   dum.alert = Math.max(dum.alert, 3);
   dum.lastSeen = { x: player.pos.x, z: player.pos.z };
   if (dum.hp <= 0) {
@@ -1364,6 +1644,7 @@ function hurtDummy(dum) {
     stats.kills += 1;
     if (dum.barBg) dum.barBg.visible = false;
     if (dum.barFill) dum.barFill.visible = false;
+    spawnAmmoPickup(dum.root.position.x, dum.root.position.z, { drop: true, carbine: 24, sweeper: 4 });
   } else if (dum.barFill) {
     const u = dum.hp / dum.max;
     dum.barFill.scale.x = Math.max(0.05, u);
@@ -1393,19 +1674,32 @@ function playerHitTest(origin, dir, maxD) {
 }
 
 function fire() {
-  if (!gameActive() || player.reloadT > 0 || player.stance === "vault") return;
-  if (player.mag <= 0) { startReload(); return; }
+  if (!gameActive() || player.stance === "vault") return;
+  if (player.reloadT > 0) return;
+  if (player.mag <= 0) {
+    if (player.reserve <= 0) playEmpty();
+    else startReload();
+    return;
+  }
+  if (player.burstWait > 0) return;
   const now = performance.now();
   const w = currentWep();
   if (now - player.lastShot < w.fireMs) return;
+  const firstShot = now - player.lastShot > 350 || player.burstCount === 0;
   player.lastShot = now;
   player.mag -= 1;
   stats.shots += 1;
+  player.burstCount += 1;
+  if (w.burst > 1 && player.burstCount >= w.burst) {
+    player.burstWait = w.burstGap;
+    player.burstCount = 0;
+  }
   const heavy = w.pellets > 1;
   cam.kickP += isTop() ? (heavy ? 0.014 : 0.006) : (heavy ? 0.04 : 0.024);
   cam.kickY += (Math.random() - 0.5) * (isTop() ? (heavy ? 0.01 : 0.004) : 0.014);
   cam.punch += isTop() ? (heavy ? 0.08 : 0.04) : 0.12;
   muzzleT = 0.045;
+  playShot(heavy ? "sweeper" : "carbine");
 
   let baseOrigin, baseDir;
   if (isTop()) {
@@ -1418,12 +1712,16 @@ function fire() {
   const muz = muzzleWorld(tmp.w);
   const muzX = muz.x, muzY = muz.y, muzZ = muz.z;
   const hitSet = new Set();
+  const still = aimBloom < 0.22 && Math.hypot(player.vel.x, player.vel.z) < 0.8;
+  let spr = w.spread * (0.28 + aimBloom * 1.35);
+  if (still) spr *= 0.32;
+  if (firstShot && !heavy) spr *= 0.22;
   for (let i = 0; i < w.pellets; i++) {
     const dir = baseDir.clone();
-    if (w.spread > 0) {
-      dir.x += (Math.random() - 0.5) * 2 * w.spread;
-      dir.y += (Math.random() - 0.5) * w.spread * 0.4;
-      dir.z += (Math.random() - 0.5) * 2 * w.spread;
+    if (spr > 0) {
+      dir.x += (Math.random() - 0.5) * 2 * spr;
+      dir.y += (Math.random() - 0.5) * spr * 0.4;
+      dir.z += (Math.random() - 0.5) * 2 * spr;
       dir.normalize();
     }
     const world = worldHit(baseOrigin, dir, w.range);
@@ -1451,6 +1749,7 @@ function fire() {
 
 function updateShoot(dt) {
   if (recentlyShot > 0) recentlyShot -= dt;
+  if (player.burstWait > 0) player.burstWait -= dt;
   const manual = touchMode
     ? (isTop() ? aimStick.mag >= FIRE_STICK : aimStick.mag > AIM_DEAD)
     : mouse.down;
@@ -1458,6 +1757,8 @@ function updateShoot(dt) {
   if (manual || auto) {
     fire();
     if (player.lastShot > 0) recentlyShot = 0.22;
+  } else if (recentlyShot <= 0) {
+    player.burstCount = 0;
   }
   if (player.reloadT > 0) {
     player.reloadT -= dt;
@@ -1528,6 +1829,8 @@ function enemyFire(d) {
   }
   spawnTracer(origin.x, origin.y, origin.z, end.x, end.y, end.z);
   spawnSpark(end.x, end.y, end.z);
+  const dist = Math.hypot(d.root.position.x - player.pos.x, d.root.position.z - player.pos.z);
+  playShot("enemy", dist);
 }
 
 function updateDummies(dt) {
@@ -1711,8 +2014,15 @@ function updateCamera(dt) {
     aimRig.position.set(player.pos.x, 0, player.pos.z);
     aimRig.rotation.y = player.yaw;
     const locked = !!assistTarget && isAiming();
-    coneMat.opacity = locked ? 0.3 : 0.16;
+    const tight = 1 - aimBloom;
+    aimCone.scale.x = 0.22 + aimBloom * 0.9;
+    coneMat.opacity = locked ? 0.16 + aimBloom * 0.16 : 0.08 + aimBloom * 0.14;
     coneMat.color.setHex(locked ? 0xf3c14a : 0xe8d0a0);
+    const lineW = 0.35 + aimBloom * 2.1;
+    aimLine.scale.x = lineW;
+    aimCore.scale.x = 0.45 + aimBloom * 0.4;
+    aimLineMat.opacity = 0.55 + tight * 0.4;
+    aimLineMat.color.setHex(locked ? 0xffc14a : 0xffe08a);
     return;
   }
   const pitch = player.pitch + cam.kickP;
@@ -1739,6 +2049,17 @@ function updateHud() {
   ammoEl.innerHTML = rel
     ? `${currentWep().short} <span>REL ${player.reloadT.toFixed(1)}s</span>`
     : `${currentWep().short} ${player.mag} <span>/ ${player.reserve}</span>`;
+  const wpn = currentWep();
+  const lowMag = player.mag <= Math.max(2, Math.floor(wpn.mag * 0.25));
+  const noRes = player.reserve <= 0;
+  const dry = noRes && player.mag <= 0;
+  ammoEl.classList.toggle("low", !dry && (lowMag || player.reserve <= wpn.mag));
+  ammoEl.classList.toggle("dry", dry);
+  if (ammoWarn) {
+    ammoWarn.classList.toggle("on", dry || lowMag || (noRes && lowMag));
+    ammoWarn.classList.toggle("dry", dry);
+    ammoWarn.textContent = dry ? "NO AMMO" : (noRes && lowMag ? "RESERVE EMPTY" : (lowMag ? "LOW AMMO" : (player.reserve <= wpn.mag ? "RESERVE LOW" : "")));
+  }
   crossEl.classList.toggle("hit", hitFlash > 0);
   const ch = document.getElementById("coverHint");
   if (ch) ch.classList.toggle("on", !!player.inCover);
@@ -1753,9 +2074,12 @@ function frame() {
     updateMove(dt);
     updateCover(dt);
     updateShoot(dt);
+    updatePickups(dt);
     if (player.hp < player.maxHp && performance.now() - player.lastHit > 4000) {
       player.hp = Math.min(player.maxHp, player.hp + 12 * dt);
     }
+  } else {
+    updatePickups(dt);
   }
   updateDummies(dt);
   checkVictory();
