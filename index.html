@@ -113,6 +113,7 @@
     }
     #btnVault { right: 168px; }
     #btnSlide { right: 96px; }
+    #btnSwap { left: 28px; bottom: 170px; }
     .tbtn.active { background: rgba(243, 193, 74, 0.35); }
   </style>
 </head>
@@ -127,7 +128,7 @@
       <div id="hint">
         WASD move · Mouse aim · Click shoot<br />
         Shift sprint · Space vault · C / Ctrl slide · R reload<br />
-        V camera · Esc pause
+        Q or 1 / 2 swap weapons · V camera · Esc pause
       </div>
     </div>
     <div id="touch">
@@ -135,6 +136,7 @@
       <div class="stick" id="stickR"><div class="knob" id="knobR"></div></div>
       <div class="tbtn" id="btnVault">VAULT</div>
       <div class="tbtn" id="btnSlide">SLIDE</div>
+      <div class="tbtn" id="btnSwap">SWAP</div>
     </div>
     <button id="btnPause" class="hidden" type="button" aria-label="Pause">II</button>
     <div id="start">
@@ -200,11 +202,16 @@ const knobL = document.getElementById("knobL");
 const knobR = document.getElementById("knobR");
 const btnVault = document.getElementById("btnVault");
 const btnSlide = document.getElementById("btnSlide");
+const btnSwap = document.getElementById("btnSwap");
 
 const MAG = 30;
 const RESERVE_MAX = 90;
 const FIRE_MS = 95;
 const RELOAD_S = 1.45;
+const WEAPONS = [
+  { name: "Line Carbine", short: "CARBINE", mag: 30, reserve: 90, fireMs: 95, reload: 1.45, pellets: 1, spread: 0.012, range: 80 },
+  { name: "Hall Sweeper", short: "SWEEPER", mag: 6, reserve: 24, fireMs: 520, reload: 1.85, pellets: 6, spread: 0.16, range: 11 },
+];
 const WALK = 5.6;
 const SPRINT = 8.6;
 const SLIDE_BOOST = 11.2;
@@ -256,6 +263,11 @@ const player = {
   mag: MAG,
   reserve: RESERVE_MAX,
   reloadT: 0,
+  wep: 0,
+  guns: [
+    { mag: 30, reserve: 90, reloadT: 0 },
+    { mag: 6, reserve: 24, reloadT: 0 },
+  ],
   lastShot: -1,
   bob: 0,
   crouch: false,
@@ -660,8 +672,13 @@ function resetMission() {
   player.stance = "stand";
   player.vault = null;
   player.slideT = 0;
-  player.mag = MAG;
-  player.reserve = RESERVE_MAX;
+  player.wep = 0;
+  player.guns = [
+    { mag: 30, reserve: 90, reloadT: 0 },
+    { mag: 6, reserve: 24, reloadT: 0 },
+  ];
+  player.mag = 30;
+  player.reserve = 90;
   player.reloadT = 0;
   player.hp = player.maxHp;
   player.lastHit = -99;
@@ -734,6 +751,9 @@ function bindKeys() {
     if (!gameActive()) return;
     if (e.code === "KeyV") toggleCamera();
     if (e.code === "KeyR") startReload();
+    if (e.code === "KeyQ") cycleWeapon();
+    if (e.code === "Digit1" || e.code === "Numpad1") swapWeapon(0);
+    if (e.code === "Digit2" || e.code === "Numpad2") swapWeapon(1);
     if (e.code === "KeyC" || e.code === "ControlLeft" || e.code === "ControlRight") trySlide();
     if (e.code === "Space") tryVault();
   });
@@ -835,6 +855,7 @@ function onTouchStart(e) {
     const p = toGamePoint(t.clientX, t.clientY);
     if (inLayoutBox(btnVault, p.x, p.y)) { btnVault.classList.add("active"); tryVault(); continue; }
     if (inLayoutBox(btnSlide, p.x, p.y)) { btnSlide.classList.add("active"); trySlide(); continue; }
+    if (inLayoutBox(btnSwap, p.x, p.y)) { btnSwap.classList.add("active"); cycleWeapon(); continue; }
     const mid = gameSize().w * 0.5;
     if (p.x < mid && moveStick.id < 0) {
       moveStick.id = t.identifier;
@@ -878,6 +899,7 @@ function endTouch(id) {
 function onTouchEnd(e) {
   btnVault.classList.remove("active");
   btnSlide.classList.remove("active");
+  btnSwap.classList.remove("active");
   for (const t of e.changedTouches) endTouch(t.identifier);
 }
 
@@ -1099,9 +1121,28 @@ function trySlide() {
   player.slideT = 0.58;
 }
 
+function currentWep() { return WEAPONS[player.wep]; }
+
+function stashGun() {
+  player.guns[player.wep] = { mag: player.mag, reserve: player.reserve, reloadT: player.reloadT };
+}
+
+function swapWeapon(index) {
+  if (!gameActive() || index === player.wep || !WEAPONS[index]) return;
+  stashGun();
+  player.wep = index;
+  const g = player.guns[index];
+  player.mag = g.mag;
+  player.reserve = g.reserve;
+  player.reloadT = g.reloadT;
+}
+
+function cycleWeapon() { swapWeapon(1 - player.wep); }
+
 function startReload() {
-  if (!gameActive() || player.reloadT > 0 || player.mag >= MAG || player.reserve <= 0) return;
-  player.reloadT = RELOAD_S;
+  const w = currentWep();
+  if (!gameActive() || player.reloadT > 0 || player.mag >= w.mag || player.reserve <= 0) return;
+  player.reloadT = w.reload;
 }
 
 function applyFriction(dt, amount) {
@@ -1313,7 +1354,6 @@ function hurtDummy(dum) {
   dum.hp -= 1;
   dum.flash = 0.12;
   hitFlash = 0.09;
-  stats.hits += 1;
   dum.alert = Math.max(dum.alert, 3);
   dum.lastSeen = { x: player.pos.x, z: player.pos.z };
   if (dum.hp <= 0) {
@@ -1356,39 +1396,56 @@ function fire() {
   if (!gameActive() || player.reloadT > 0 || player.stance === "vault") return;
   if (player.mag <= 0) { startReload(); return; }
   const now = performance.now();
-  if (now - player.lastShot < FIRE_MS) return;
+  const w = currentWep();
+  if (now - player.lastShot < w.fireMs) return;
   player.lastShot = now;
   player.mag -= 1;
   stats.shots += 1;
-  cam.kickP += isTop() ? 0.006 : 0.024;
-  cam.kickY += (Math.random() - 0.5) * (isTop() ? 0.004 : 0.014);
-  cam.punch += isTop() ? 0.04 : 0.12;
+  const heavy = w.pellets > 1;
+  cam.kickP += isTop() ? (heavy ? 0.014 : 0.006) : (heavy ? 0.04 : 0.024);
+  cam.kickY += (Math.random() - 0.5) * (isTop() ? (heavy ? 0.01 : 0.004) : 0.014);
+  cam.punch += isTop() ? (heavy ? 0.08 : 0.04) : 0.12;
   muzzleT = 0.045;
 
-  let origin, dir;
+  let baseOrigin, baseDir;
   if (isTop()) {
-    origin = tmp.q.set(player.pos.x, player.crouch ? 0.72 : 1.15, player.pos.z);
-    dir = tmp.v.set(Math.sin(player.yaw), -0.02, Math.cos(player.yaw)).normalize();
+    baseOrigin = new THREE.Vector3(player.pos.x, player.crouch ? 0.72 : 1.15, player.pos.z);
+    baseDir = new THREE.Vector3(Math.sin(player.yaw), -0.02, Math.cos(player.yaw)).normalize();
   } else {
-    origin = camera.position;
-    dir = tmp.q.set(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
-  }
-  const originCopy = origin.clone();
-  const dirCopy = dir.clone();
-  const world = worldHit(originCopy, dirCopy, 80);
-  const dum = dummyHitTest(originCopy, dirCopy, world.dist);
-  let end;
-  if (dum) {
-    end = originCopy.clone().addScaledVector(dirCopy, dum.dist);
-    hurtDummy(dum.dum);
-  } else if (world.pt) {
-    end = world.pt;
-  } else {
-    end = originCopy.clone().addScaledVector(dirCopy, 70);
+    baseOrigin = camera.position.clone();
+    baseDir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
   }
   const muz = muzzleWorld(tmp.w);
-  spawnTracer(muz.x, muz.y, muz.z, end.x, end.y, end.z);
-  spawnSpark(end.x, end.y, end.z);
+  const muzX = muz.x, muzY = muz.y, muzZ = muz.z;
+  const hitSet = new Set();
+  for (let i = 0; i < w.pellets; i++) {
+    const dir = baseDir.clone();
+    if (w.spread > 0) {
+      dir.x += (Math.random() - 0.5) * 2 * w.spread;
+      dir.y += (Math.random() - 0.5) * w.spread * 0.4;
+      dir.z += (Math.random() - 0.5) * 2 * w.spread;
+      dir.normalize();
+    }
+    const world = worldHit(baseOrigin, dir, w.range);
+    const dum = dummyHitTest(baseOrigin, dir, Math.min(world.dist, w.range));
+    let end;
+    if (dum) {
+      end = baseOrigin.clone().addScaledVector(dir, dum.dist);
+      if (!hitSet.has(dum.dum)) {
+        hitSet.add(dum.dum);
+        hurtDummy(dum.dum);
+      } else {
+        hurtDummy(dum.dum);
+      }
+    } else if (world.pt) {
+      end = world.pt;
+    } else {
+      end = baseOrigin.clone().addScaledVector(dir, w.range);
+    }
+    spawnTracer(muzX, muzY, muzZ, end.x, end.y, end.z);
+    spawnSpark(end.x, end.y, end.z);
+  }
+  if (hitSet.size) stats.hits += 1;
   if (player.mag <= 0) startReload();
 }
 
@@ -1405,7 +1462,7 @@ function updateShoot(dt) {
   if (player.reloadT > 0) {
     player.reloadT -= dt;
     if (player.reloadT <= 0) {
-      const need = MAG - player.mag;
+      const need = currentWep().mag - player.mag;
       const take = Math.min(need, player.reserve);
       player.mag += take;
       player.reserve -= take;
@@ -1680,8 +1737,8 @@ function updateHud() {
   const rel = player.reloadT > 0;
   ammoEl.classList.toggle("reloading", rel);
   ammoEl.innerHTML = rel
-    ? `REL <span>${player.reloadT.toFixed(1)}s</span>`
-    : `${player.mag} <span>/ ${player.reserve}</span>`;
+    ? `${currentWep().short} <span>REL ${player.reloadT.toFixed(1)}s</span>`
+    : `${currentWep().short} ${player.mag} <span>/ ${player.reserve}</span>`;
   crossEl.classList.toggle("hit", hitFlash > 0);
   const ch = document.getElementById("coverHint");
   if (ch) ch.classList.toggle("on", !!player.inCover);
