@@ -171,7 +171,10 @@ const VAULT_MIN = 0.32;
 const CAM_TILT = 60 * Math.PI / 180;
 const CAM_DIST = 15.5;
 const AIM_DEAD = 0.16;
-const FIRE_STICK = 0.4;
+const FIRE_STICK = 0.75;
+const AIM_RANGE = 16;
+const AIM_CONE = 14 * Math.PI / 180;
+const AIM_SPEED = 0.5;
 const STORE = "pipe-hitters-settings";
 const FPS_LOOK_BASE = 0.00085;
 
@@ -189,6 +192,8 @@ let touchMode = false;
 let playing = false;
 let paused = false;
 let cssLandscape = false;
+let assistTarget = null;
+let recentlyShot = 0;
 
 const player = {
   pos: new THREE.Vector3(0, 0, 14),
@@ -352,6 +357,30 @@ aimMark.add(boxMesh(0.08, 0.04, 0.42, 0xf3c14a, 0, 0.03, 0));
 aimMark.children.forEach((m) => { m.material = markMat; });
 scene.add(aimMark);
 
+const coneLen = AIM_RANGE * 0.85;
+const coneHalf = Math.tan(AIM_CONE) * coneLen;
+const coneGeo = new THREE.BufferGeometry();
+coneGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array([
+  0, 0.04, 0.35,
+  -coneHalf, 0.04, coneLen,
+  coneHalf, 0.04, coneLen,
+]), 3));
+coneGeo.computeVertexNormals();
+const coneMat = new THREE.MeshBasicMaterial({
+  color: 0xe8d0a0, transparent: true, opacity: 0.18,
+  depthWrite: false, side: THREE.DoubleSide,
+});
+const aimCone = new THREE.Mesh(coneGeo, coneMat);
+const aimLine = new THREE.Mesh(
+  new THREE.BoxGeometry(0.06, 0.03, coneLen),
+  new THREE.MeshBasicMaterial({ color: 0xf0e0b8, transparent: true, opacity: 0.32, depthWrite: false })
+);
+aimLine.position.set(0, 0.05, coneLen * 0.5);
+const aimRig = new THREE.Group();
+aimRig.add(aimCone, aimLine);
+aimRig.visible = false;
+scene.add(aimRig);
+
 function makeDummy(x, z, facing) {
   const root = makeSoldier(0xb45a34, 0x6a3a28, 0xe2c9a8, 0x2a2420);
   root.position.set(x, 0, z);
@@ -459,6 +488,7 @@ function syncUi() {
   document.body.classList.toggle("fps", !isTop());
   crossEl.classList.toggle("hidden", isTop() || !playing || paused);
   aimMark.visible = isTop() && playing;
+  aimRig.visible = isTop() && playing && !paused;
   soldier.visible = isTop();
   viewGun.visible = !isTop();
   touchEl.classList.toggle("show", touchMode && playing && !paused);
@@ -701,6 +731,45 @@ touchEl.addEventListener("touchcancel", onTouchEnd);
 
 bindKeys();
 
+function isAiming() {
+  if (touchMode) return aimStick.mag > AIM_DEAD;
+  if (isTop()) return mouse.down || !!assistTarget;
+  return mouse.down;
+}
+
+function segmentHitsCover(ax, az, bx, bz, maxH) {
+  const dx = bx - ax, dz = bz - az;
+  const len = Math.hypot(dx, dz);
+  if (len < 0.05) return false;
+  const ox = tmp.q.set(ax, 1.0, az);
+  const dir = tmp.v.set(dx / len, 0, dz / len);
+  const hit = worldHit(ox, dir, len - 0.2);
+  if (!hit.pt) return false;
+  return true;
+}
+
+function findAssistTarget() {
+  if (isTop() && touchMode && aimStick.mag <= AIM_DEAD) return null;
+  const dirx = Math.sin(player.yaw), dirz = Math.cos(player.yaw);
+  let best = null, bestScore = 1e9;
+  for (const d of dummies) {
+    if (d.state === "down") continue;
+    const dx = d.root.position.x - player.pos.x;
+    const dz = d.root.position.z - player.pos.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist < 0.5 || dist > AIM_RANGE) continue;
+    const ang = Math.atan2(dx, dz) - player.yaw;
+    let a = ang;
+    while (a > Math.PI) a -= Math.PI * 2;
+    while (a < -Math.PI) a += Math.PI * 2;
+    if (Math.abs(a) > AIM_CONE) continue;
+    if (segmentHitsCover(player.pos.x, player.pos.z, d.root.position.x, d.root.position.z, 1.2)) continue;
+    const score = Math.abs(a) * 4 + dist * 0.08;
+    if (score < bestScore) { bestScore = score; best = d; }
+  }
+  return best;
+}
+
 function wishDir() {
   let sx = 0, sy = 0;
   if (touchMode) {
@@ -768,9 +837,8 @@ function blockedAt(x, z, rad) {
   return false;
 }
 
-function findVault() {
-  const dirx = Math.sin(player.yaw);
-  const dirz = Math.cos(player.yaw);
+function findVault(dirx, dirz) {
+  if (dirx == null) { dirx = Math.sin(player.yaw); dirz = Math.cos(player.yaw); }
   let best = null;
   for (const o of obstacles) {
     if (!o.vaultable || o.h < VAULT_MIN || o.h > VAULT_MAX) continue;
@@ -789,9 +857,9 @@ function findVault() {
   return best;
 }
 
-function tryVault() {
+function tryVault(hit) {
   if (!gameActive() || player.vault || player.stance === "slide") return;
-  const hit = findVault();
+  hit = hit || findVault();
   if (!hit) return;
   player.stance = "vault";
   player.vault = {
@@ -863,19 +931,28 @@ function updateLook(dt) {
       if (aimStick.mag > AIM_DEAD) {
         const target = Math.atan2(aimStick.x, aimStick.y);
         player.yaw = dampAngle(player.yaw, target, turn, dt);
-        aimPoint.set(
-          player.pos.x + Math.sin(player.yaw) * 4.5,
-          0.03,
-          player.pos.z + Math.cos(player.yaw) * 4.5
-        );
       }
     } else {
       const yaw = aimFromGround();
       if (yaw != null) player.yaw = dampAngle(player.yaw, yaw, turn, dt);
     }
+    assistTarget = findAssistTarget();
+    if (assistTarget && isAiming()) {
+      const dx = assistTarget.root.position.x - player.pos.x;
+      const dz = assistTarget.root.position.z - player.pos.z;
+      player.yaw = dampAngle(player.yaw, Math.atan2(dx, dz), 7 * aimMul(), dt);
+      aimPoint.set(assistTarget.root.position.x, 0.03, assistTarget.root.position.z);
+    } else {
+      aimPoint.set(
+        player.pos.x + Math.sin(player.yaw) * Math.min(AIM_RANGE, 8),
+        0.03,
+        player.pos.z + Math.cos(player.yaw) * Math.min(AIM_RANGE, 8)
+      );
+    }
     player.pitch = damp(player.pitch, 0.08, 8, dt);
     return;
   }
+  assistTarget = null;
   if (touchMode) {
     const sens = FPS_LOOK_BASE * fpsMul() * 520;
     player.yaw -= aimStick.x * sens * dt;
@@ -912,8 +989,19 @@ function updateMove(dt) {
   }
 
   const wish = wishDir();
-  const isSprint = sprinting(wish);
-  const speed = player.stance === "slide" ? SLIDE_BOOST : (isSprint ? SPRINT : WALK);
+  const aiming = isAiming() || recentlyShot > 0;
+  const isSprint = !aiming && sprinting(wish);
+  let speed = player.stance === "slide" ? SLIDE_BOOST : (isSprint ? SPRINT : WALK);
+  if (aiming && player.stance !== "slide") speed *= AIM_SPEED;
+
+  if (player.stance !== "slide" && wish.mag > 0.45) {
+    const vx = player.vel.x, vz = player.vel.z;
+    const spd = Math.hypot(vx, vz);
+    if (spd > 3.0 || wish.mag > 0.7) {
+      const hit = findVault(wish.x, wish.z);
+      if (hit && hit.dist < 0.95) { tryVault(hit); return; }
+    }
+  }
 
   if (player.stance === "slide") {
     player.slideT -= dt;
@@ -1061,8 +1149,15 @@ function fire() {
 }
 
 function updateShoot(dt) {
-  const holding = touchMode ? (isTop() ? aimStick.mag >= FIRE_STICK : aimStick.mag > AIM_DEAD) : mouse.down;
-  if (holding) fire();
+  if (recentlyShot > 0) recentlyShot -= dt;
+  const manual = touchMode
+    ? (isTop() ? aimStick.mag >= FIRE_STICK : aimStick.mag > AIM_DEAD)
+    : mouse.down;
+  const auto = isTop() && isAiming() && !!assistTarget;
+  if (manual || auto) {
+    fire();
+    if (player.lastShot > 0) recentlyShot = 0.22;
+  }
   if (player.reloadT > 0) {
     player.reloadT -= dt;
     if (player.reloadT <= 0) {
@@ -1188,6 +1283,13 @@ function updateCamera(dt) {
       camera.updateProjectionMatrix();
     }
     aimMark.position.set(aimPoint.x, 0.04, aimPoint.z);
+    aimMark.visible = isTop() && playing && isAiming();
+    aimRig.visible = isTop() && playing && !paused && (isAiming() || aimStick.mag > AIM_DEAD || !touchMode);
+    aimRig.position.set(player.pos.x, 0, player.pos.z);
+    aimRig.rotation.y = player.yaw;
+    const locked = !!assistTarget && isAiming();
+    coneMat.opacity = locked ? 0.3 : 0.16;
+    coneMat.color.setHex(locked ? 0xf3c14a : 0xe8d0a0);
     return;
   }
   const pitch = player.pitch + cam.kickP;
