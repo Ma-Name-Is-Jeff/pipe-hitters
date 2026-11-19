@@ -7,22 +7,32 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { width: 100%; height: 100%; overflow: hidden; background: #0e1210; font-family: "Segoe UI", system-ui, sans-serif; color: #e8dcc8; touch-action: none; user-select: none; -webkit-user-select: none; }
-    canvas { display: block; width: 100%; height: 100%; }
-    #overlay, #hud { position: fixed; inset: 0; pointer-events: none; }
-    #start {
-      position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
-      background: rgba(8, 10, 9, 0.72); pointer-events: auto; cursor: pointer; z-index: 5; text-align: center; padding: 24px;
+    #game { position: fixed; inset: 0; overflow: hidden; }
+    #game.landscape-fallback {
+      top: 0;
+      left: 100%;
+      width: 100vh;
+      height: 100vw;
+      transform: rotate(90deg);
+      transform-origin: 0 0;
     }
-    #start h1 { font-weight: 700; letter-spacing: 0.28em; font-size: clamp(22px, 5vw, 42px); margin-bottom: 10px; }
+    canvas { display: block; width: 100%; height: 100%; }
+    body.top-down canvas { cursor: crosshair; }
+    #hud { position: absolute; inset: 0; pointer-events: none; }
+    #start, #pause {
+      position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      background: rgba(8, 10, 9, 0.72); pointer-events: auto; z-index: 8; text-align: center; padding: 24px;
+    }
+    #start { cursor: pointer; z-index: 7; }
+    #start h1, #pause h2 { font-weight: 700; letter-spacing: 0.28em; font-size: clamp(22px, 5vw, 42px); margin-bottom: 10px; }
     #start p { opacity: 0.8; font-size: 15px; max-width: 420px; line-height: 1.45; }
-    #start.hidden { display: none; }
+    #start.hidden, #pause.hidden, #btnPause.hidden, #crosshair.hidden, #hint.hidden { display: none; }
     #crosshair {
       position: absolute; left: 50%; top: 50%; width: 22px; height: 22px; transform: translate(-50%, -50%);
     }
     #crosshair i { position: absolute; background: #f2efe6; box-shadow: 0 0 0 1px rgba(0,0,0,0.45); }
     #crosshair .h { left: 0; right: 0; top: 10px; height: 2px; }
     #crosshair .v { top: 0; bottom: 0; left: 10px; width: 2px; }
-    #crosshair .gap { position: absolute; left: 8px; top: 8px; width: 6px; height: 6px; background: #0e1210; opacity: 0.0; }
     #crosshair.hit i { background: #f3c14a; }
     #ammo {
       position: absolute; right: 28px; bottom: 28px; font-variant-numeric: tabular-nums; letter-spacing: 0.08em;
@@ -32,9 +42,28 @@
     #ammo.reloading { opacity: 0.55; }
     #hint {
       position: absolute; left: 20px; bottom: 20px; font-size: 12px; line-height: 1.55; opacity: 0.72;
-      text-shadow: 0 1px 2px #000; max-width: 280px;
+      text-shadow: 0 1px 2px #000; max-width: 300px;
     }
-    #touch { position: fixed; inset: 0; pointer-events: none; z-index: 4; display: none; }
+    #btnPause {
+      position: absolute; top: max(12px, env(safe-area-inset-top, 0px)); right: max(12px, env(safe-area-inset-right, 0px));
+      width: 48px; height: 48px; border-radius: 10px; border: 2px solid rgba(232, 220, 200, 0.4);
+      background: rgba(14, 18, 16, 0.55); color: #e8dcc8; font-size: 16px; letter-spacing: 0.08em;
+      pointer-events: auto; z-index: 6; cursor: pointer;
+    }
+    #pause .panel {
+      width: min(420px, 92%); background: rgba(18, 22, 20, 0.94); border: 1px solid rgba(232, 220, 200, 0.22);
+      border-radius: 14px; padding: 22px 20px 18px; text-align: left;
+    }
+    #pause button, #pause .tog {
+      display: block; width: 100%; margin: 8px 0; padding: 12px 14px; border-radius: 8px;
+      border: 1px solid rgba(232, 220, 200, 0.28); background: rgba(232, 220, 200, 0.08);
+      color: #e8dcc8; font-size: 15px; letter-spacing: 0.04em; cursor: pointer; text-align: left;
+    }
+    #btnResume { background: rgba(243, 193, 74, 0.2); border-color: rgba(243, 193, 74, 0.45); font-weight: 650; }
+    #pause label.slider { display: block; margin: 14px 0 8px; font-size: 13px; letter-spacing: 0.04em; opacity: 0.95; }
+    #pause label.slider span { float: right; opacity: 0.7; }
+    #pause input[type="range"] { width: 100%; margin-top: 6px; accent-color: #f3c14a; }
+    #touch { position: absolute; inset: 0; pointer-events: none; z-index: 4; display: none; }
     #touch.show { display: block; }
     .stick, .tbtn {
       position: absolute; pointer-events: auto; border: 2px solid rgba(232, 220, 200, 0.35);
@@ -56,25 +85,44 @@
     .tbtn.active { background: rgba(243, 193, 74, 0.35); }
   </style>
 </head>
-<body>
-  <canvas id="c"></canvas>
-  <div id="hud">
-    <div id="crosshair"><i class="h"></i><i class="v"></i></div>
-    <div id="ammo">30 <span>/ 90</span></div>
-    <div id="hint">
-      WASD move · Mouse aim · Click shoot<br />
-      Shift sprint · Space vault · C / Ctrl slide · R reload
+<body class="top-down">
+  <div id="game">
+    <canvas id="c"></canvas>
+    <div id="hud">
+      <div id="crosshair" class="hidden"><i class="h"></i><i class="v"></i></div>
+      <div id="ammo">30 <span>/ 90</span></div>
+      <div id="hint">
+        WASD move · Mouse aim · Click shoot<br />
+        Shift sprint · Space vault · C / Ctrl slide · R reload<br />
+        V camera · Esc pause
+      </div>
     </div>
-  </div>
-  <div id="touch">
-    <div class="stick" id="stickL"><div class="knob" id="knobL"></div></div>
-    <div class="stick" id="stickR"><div class="knob" id="knobR"></div></div>
-    <div class="tbtn" id="btnVault">VAULT</div>
-    <div class="tbtn" id="btnSlide">SLIDE</div>
-  </div>
-  <div id="start">
-    <h1>PIPE HITTERS</h1>
-    <p>Click or tap to start. Move, aim, and shoot in the test yard. This build is the movement and gunfeel core.</p>
+    <div id="touch">
+      <div class="stick" id="stickL"><div class="knob" id="knobL"></div></div>
+      <div class="stick" id="stickR"><div class="knob" id="knobR"></div></div>
+      <div class="tbtn" id="btnVault">VAULT</div>
+      <div class="tbtn" id="btnSlide">SLIDE</div>
+    </div>
+    <button id="btnPause" class="hidden" type="button" aria-label="Pause">II</button>
+    <div id="start">
+      <h1>PIPE HITTERS</h1>
+      <p>Click or tap to start. Move with the left stick or WASD, aim with the right stick or the mouse, and clear the test yard.</p>
+    </div>
+    <div id="pause" class="hidden">
+      <div class="panel">
+        <h2>PAUSED</h2>
+        <button id="btnResume" type="button">Resume</button>
+        <button id="optCamera" type="button">Camera: Top-down</button>
+        <button id="optLandscape" type="button">Landscape: Off</button>
+        <button id="optInvert" type="button">Invert move stick: Off</button>
+        <label class="slider">Aim sensitivity <span id="aimSensVal">70</span>
+          <input type="range" id="optAimSens" min="20" max="200" value="70" />
+        </label>
+        <label class="slider">First-person look <span id="fpsSensVal">45</span>
+          <input type="range" id="optFpsSens" min="20" max="200" value="45" />
+        </label>
+      </div>
+    </div>
   </div>
   <script type="importmap">
   { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
@@ -82,8 +130,19 @@
   <script type="module">
 import * as THREE from "three";
 
+const gameEl = document.getElementById("game");
 const canvas = document.getElementById("c");
 const startEl = document.getElementById("start");
+const pauseEl = document.getElementById("pause");
+const btnPause = document.getElementById("btnPause");
+const btnResume = document.getElementById("btnResume");
+const optCamera = document.getElementById("optCamera");
+const optLandscape = document.getElementById("optLandscape");
+const optInvert = document.getElementById("optInvert");
+const optAimSens = document.getElementById("optAimSens");
+const optFpsSens = document.getElementById("optFpsSens");
+const aimSensVal = document.getElementById("aimSensVal");
+const fpsSensVal = document.getElementById("fpsSensVal");
 const ammoEl = document.getElementById("ammo");
 const crossEl = document.getElementById("crosshair");
 const hintEl = document.getElementById("hint");
@@ -107,26 +166,36 @@ const FRICTION = 12;
 const SLIDE_FRICTION = 4.2;
 const RADIUS = 0.36;
 const STAND_H = 1.7;
-const SLIDE_H = 0.72;
-const LOOK_SENS = 0.00215;
-const TOUCH_SENS = 0.0034;
 const VAULT_MAX = 1.15;
 const VAULT_MIN = 0.32;
+const CAM_TILT = 60 * Math.PI / 180;
+const CAM_DIST = 15.5;
+const AIM_DEAD = 0.16;
+const FIRE_STICK = 0.4;
+const STORE = "pipe-hitters-settings";
+const FPS_LOOK_BASE = 0.00085;
+
+const settings = { camera: "top", invertMove: false, landscape: false, aimSens: 70, fpsSens: 45 };
+try {
+  const saved = JSON.parse(localStorage.getItem(STORE) || "null");
+  if (saved && typeof saved === "object") Object.assign(settings, saved);
+} catch {}
 
 const keys = Object.create(null);
-const mouse = { lx: 0, ly: 0, down: false };
+const mouse = { lx: 0, ly: 0, down: false, gx: 0, gy: 0 };
 const moveStick = { x: 0, y: 0, id: -1 };
-const aimStick = { x: 0, y: 0, id: -1, firing: false };
+const aimStick = { x: 0, y: 0, id: -1, mag: 0 };
 let touchMode = false;
-let pointerReady = false;
+let playing = false;
+let paused = false;
+let cssLandscape = false;
 
 const player = {
   pos: new THREE.Vector3(0, 0, 14),
   vel: new THREE.Vector3(),
   yaw: Math.PI,
   bodyYaw: Math.PI,
-  pitch: 0.12,
-  height: STAND_H,
+  pitch: 0.1,
   stance: "stand",
   slideT: 0,
   vault: null,
@@ -138,12 +207,12 @@ const player = {
 };
 
 const cam = {
-  pos: new THREE.Vector3(0.7, 1.91, 17.15),
+  pos: new THREE.Vector3(0, CAM_DIST * Math.sin(CAM_TILT), 14 + CAM_DIST * Math.cos(CAM_TILT)),
   kickP: 0,
   kickY: 0,
   punch: 0,
   roll: 0,
-  fov: 62,
+  fov: 52,
 };
 
 const tmp = {
@@ -151,6 +220,8 @@ const tmp = {
   r: new THREE.Raycaster(), n: new THREE.Vector2(),
   m: new THREE.Matrix4(), e: new THREE.Euler(), quat: new THREE.Quaternion(),
 };
+const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const aimPoint = new THREE.Vector3(0, 0.02, 12);
 const clock = new THREE.Clock();
 const obstacles = [];
 const dummies = [];
@@ -161,9 +232,9 @@ let muzzleT = 0;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x8a9aa3);
-scene.fog = new THREE.Fog(0x8a9aa3, 22, 58);
+scene.fog = new THREE.Fog(0x8a9aa3, 28, 80);
 
-const camera = new THREE.PerspectiveCamera(62, 1, 0.08, 120);
+const camera = new THREE.PerspectiveCamera(52, 1, 0.08, 140);
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -210,13 +281,11 @@ function buildYard() {
   pad.position.y = 0.01;
   scene.add(pad);
 
-  // borders
   addObstacle(0, 0, -20.4, 41.4, 2.2, 0.8, 0x3d4440, false);
   addObstacle(0, 0, 20.4, 41.4, 2.2, 0.8, 0x3d4440, false);
   addObstacle(-20.4, 0, 0, 0.8, 2.2, 41.4, 0x3d4440, false);
   addObstacle(20.4, 0, 0, 0.8, 2.2, 41.4, 0x3d4440, false);
 
-  // crate clusters
   const crate = 0x6b5a43;
   const crate2 = 0x5a4c38;
   const wall = 0x5a635c;
@@ -262,12 +331,26 @@ function makeSoldier(body, pants, skin, gunCol) {
 const soldier = makeSoldier(0x2c4a4a, 0x1c2a2a, 0xd2bfa4, 0x1b1c1e);
 scene.add(soldier);
 
+const viewGun = new THREE.Group();
+viewGun.add(boxMesh(0.07, 0.1, 0.42, 0x1b1c1e, 0.22, -0.18, -0.55));
+viewGun.add(boxMesh(0.05, 0.08, 0.28, 0x2a2a2c, 0.22, -0.16, -0.28));
+viewGun.visible = false;
+camera.add(viewGun);
+scene.add(camera);
+
 const muzzleLight = new THREE.PointLight(0xffcc77, 0, 4);
 scene.add(muzzleLight);
 const muzzleFlash = boxMesh(0.08, 0.08, 0.18, 0xffe9a6, 0, 0, 0);
 muzzleFlash.material = new THREE.MeshBasicMaterial({ color: 0xffe6a0 });
 muzzleFlash.visible = false;
 scene.add(muzzleFlash);
+
+const aimMark = new THREE.Group();
+const markMat = new THREE.MeshBasicMaterial({ color: 0xf3c14a });
+aimMark.add(boxMesh(0.42, 0.04, 0.08, 0xf3c14a, 0, 0.03, 0));
+aimMark.add(boxMesh(0.08, 0.04, 0.42, 0xf3c14a, 0, 0.03, 0));
+aimMark.children.forEach((m) => { m.material = markMat; });
+scene.add(aimMark);
 
 function makeDummy(x, z, facing) {
   const root = makeSoldier(0xb45a34, 0x6a3a28, 0xe2c9a8, 0x2a2420);
@@ -321,14 +404,37 @@ function damp(cur, target, lambda, dt) {
 function dampV(cur, target, lambda, dt) {
   cur.lerp(target, 1 - Math.exp(-lambda * dt));
 }
+function dampAngle(cur, target, lambda, dt) {
+  let d = target - cur;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return cur + d * (1 - Math.exp(-lambda * dt));
+}
+function isTop() { return settings.camera !== "fps"; }
+function aimMul() { return settings.aimSens / 100; }
+function fpsMul() { return settings.fpsSens / 100; }
+
+function saveSettings() {
+  try { localStorage.setItem(STORE, JSON.stringify(settings)); } catch {}
+}
+
+function gameSize() {
+  return { w: Math.max(1, gameEl.clientWidth), h: Math.max(1, gameEl.clientHeight) };
+}
+
+function toGamePoint(clientX, clientY) {
+  if (!cssLandscape) return { x: clientX, y: clientY };
+  return { x: clientY, y: window.innerWidth - clientX };
+}
 
 function resize() {
-  const w = window.innerWidth, h = window.innerHeight;
-  camera.aspect = w / Math.max(1, h);
+  const { w, h } = gameSize();
+  camera.aspect = w / h;
   camera.updateProjectionMatrix();
   renderer.setSize(w, h, false);
 }
 window.addEventListener("resize", resize);
+window.addEventListener("orientationchange", () => setTimeout(resize, 250));
 resize();
 
 function isTouchDevice() {
@@ -337,14 +443,121 @@ function isTouchDevice() {
 
 function showTouch(on) {
   touchMode = on;
-  touchEl.classList.toggle("show", on);
-  hintEl.style.display = on ? "none" : "block";
+  touchEl.classList.toggle("show", on && !paused);
+  hintEl.classList.toggle("hidden", on);
 }
+
+function syncUi() {
+  optCamera.textContent = "Camera: " + (isTop() ? "Top-down" : "First-person");
+  optLandscape.textContent = "Landscape: " + (settings.landscape ? "On" : "Off");
+  optInvert.textContent = "Invert move stick: " + (settings.invertMove ? "On" : "Off");
+  optAimSens.value = String(settings.aimSens);
+  optFpsSens.value = String(settings.fpsSens);
+  aimSensVal.textContent = String(settings.aimSens);
+  fpsSensVal.textContent = String(settings.fpsSens);
+  document.body.classList.toggle("top-down", isTop());
+  document.body.classList.toggle("fps", !isTop());
+  crossEl.classList.toggle("hidden", isTop() || !playing || paused);
+  aimMark.visible = isTop() && playing;
+  soldier.visible = isTop();
+  viewGun.visible = !isTop();
+  touchEl.classList.toggle("show", touchMode && playing && !paused);
+}
+
+function applyCameraMode() {
+  if (isTop()) {
+    if (document.pointerLockElement) document.exitPointerLock();
+    cam.fov = 52;
+    camera.fov = 52;
+    camera.near = 0.2;
+    camera.far = 140;
+  } else {
+    cam.fov = 72;
+    camera.fov = 72;
+    camera.near = 0.06;
+    camera.far = 120;
+    if (playing && !paused && !touchMode) canvas.requestPointerLock();
+  }
+  camera.updateProjectionMatrix();
+  syncUi();
+}
+
+function setPaused(on) {
+  paused = on;
+  pauseEl.classList.toggle("hidden", !on);
+  if (on && document.pointerLockElement) document.exitPointerLock();
+  if (!on && playing && !isTop() && !touchMode) canvas.requestPointerLock();
+  mouse.down = false;
+  syncUi();
+}
+
+function setPlaying(on) {
+  playing = on;
+  startEl.classList.toggle("hidden", on);
+  btnPause.classList.toggle("hidden", !on);
+  if (!on) setPaused(false);
+  syncUi();
+}
+
+async function setLandscape(on) {
+  settings.landscape = on;
+  saveSettings();
+  if (!on) {
+    cssLandscape = false;
+    gameEl.classList.remove("landscape-fallback");
+    try { screen.orientation && screen.orientation.unlock && screen.orientation.unlock(); } catch {}
+    try { if (document.fullscreenElement) await document.exitFullscreen(); } catch {}
+    resize();
+    syncUi();
+    return;
+  }
+  const root = document.documentElement;
+  try {
+    const req = root.requestFullscreen || root.webkitRequestFullscreen;
+    if (req) await req.call(root);
+  } catch {}
+  let locked = false;
+  try {
+    if (screen.orientation && screen.orientation.lock) {
+      await screen.orientation.lock("landscape");
+      locked = true;
+    }
+  } catch {}
+  if (!locked && window.innerHeight > window.innerWidth) {
+    cssLandscape = true;
+    gameEl.classList.add("landscape-fallback");
+  } else {
+    cssLandscape = false;
+    gameEl.classList.remove("landscape-fallback");
+  }
+  resize();
+  syncUi();
+}
+
+function toggleCamera() {
+  settings.camera = isTop() ? "fps" : "top";
+  saveSettings();
+  applyCameraMode();
+}
+
+function startPlay() {
+  if (isTouchDevice() || touchMode) showTouch(true);
+  setPlaying(true);
+  if (!isTop() && !touchMode) canvas.requestPointerLock();
+}
+
+function gameActive() { return playing && !paused; }
 
 function bindKeys() {
   window.addEventListener("keydown", (e) => {
     keys[e.code] = true;
     if (["Space", "AltLeft", "AltRight"].includes(e.code)) e.preventDefault();
+    if (e.code === "Escape") {
+      if (playing) setPaused(!paused);
+      return;
+    }
+    if (!gameActive()) return;
+    if (e.code === "KeyV") toggleCamera();
     if (e.code === "KeyR") startReload();
     if (e.code === "KeyC" || e.code === "ControlLeft" || e.code === "ControlRight") trySlide();
     if (e.code === "Space") tryVault();
@@ -352,31 +565,26 @@ function bindKeys() {
   window.addEventListener("keyup", (e) => { keys[e.code] = false; });
   window.addEventListener("contextmenu", (e) => e.preventDefault());
   window.addEventListener("mousedown", (e) => {
-    if (e.button === 0) mouse.down = true;
+    if (e.button !== 0) return;
+    if (e.target && e.target.closest && e.target.closest("button, input, .panel, #pause, #start, #btnPause")) return;
+    if (gameActive()) mouse.down = true;
   });
   window.addEventListener("mouseup", (e) => {
     if (e.button === 0) mouse.down = false;
   });
   document.addEventListener("mousemove", (e) => {
-    if (!pointerReady || touchMode) return;
-    if (document.pointerLockElement !== canvas) return;
-    mouse.lx += e.movementX;
-    mouse.ly += e.movementY;
+    const p = toGamePoint(e.clientX, e.clientY);
+    mouse.gx = p.x;
+    mouse.gy = p.y;
+    if (!gameActive() || touchMode) return;
+    if (!isTop() && document.pointerLockElement === canvas) {
+      mouse.lx += e.movementX;
+      mouse.ly += e.movementY;
+    }
   });
   document.addEventListener("pointerlockchange", () => {
-    pointerReady = document.pointerLockElement === canvas;
-    startEl.classList.toggle("hidden", pointerReady || touchMode);
+    if (isTop() && document.pointerLockElement) document.exitPointerLock();
   });
-}
-
-function startPlay() {
-  if (isTouchDevice() || touchMode) {
-    showTouch(true);
-    pointerReady = true;
-    startEl.classList.add("hidden");
-    return;
-  }
-  canvas.requestPointerLock();
 }
 
 startEl.addEventListener("click", startPlay);
@@ -386,9 +594,33 @@ startEl.addEventListener("touchstart", (e) => {
   startPlay();
 }, { passive: false });
 
-function stickPos(el, ev) {
-  const r = el.getBoundingClientRect();
-  return { x: ev.clientX - (r.left + r.width / 2), y: ev.clientY - (r.top + r.height / 2) };
+btnPause.addEventListener("click", (e) => { e.stopPropagation(); if (playing) setPaused(true); });
+btnResume.addEventListener("click", (e) => { e.stopPropagation(); setPaused(false); });
+optCamera.addEventListener("click", (e) => { e.stopPropagation(); toggleCamera(); });
+optLandscape.addEventListener("click", (e) => { e.stopPropagation(); setLandscape(!settings.landscape); });
+optInvert.addEventListener("click", (e) => {
+  e.stopPropagation();
+  settings.invertMove = !settings.invertMove;
+  saveSettings();
+  syncUi();
+});
+optAimSens.addEventListener("input", () => {
+  settings.aimSens = Number(optAimSens.value);
+  saveSettings();
+  syncUi();
+});
+optFpsSens.addEventListener("input", () => {
+  settings.fpsSens = Number(optFpsSens.value);
+  saveSettings();
+  syncUi();
+});
+
+function layoutCenter(el) {
+  return { x: el.offsetLeft + el.offsetWidth / 2, y: el.offsetTop + el.offsetHeight / 2 };
+}
+function inLayoutBox(el, x, y) {
+  return x >= el.offsetLeft && x <= el.offsetLeft + el.offsetWidth &&
+    y >= el.offsetTop && y <= el.offsetTop + el.offsetHeight;
 }
 function setKnob(knob, x, y, max) {
   const l = Math.hypot(x, y);
@@ -399,65 +631,52 @@ function resetKnob(knob) {
   knob.style.transform = "translate(-50%, -50%)";
 }
 
+function stickFromPoint(el, x, y) {
+  const c = layoutCenter(el);
+  const p = { x: x - c.x, y: y - c.y };
+  const max = 46;
+  const len = Math.hypot(p.x, p.y);
+  const k = len > max ? max / len : 1;
+  return { sx: (p.x * k) / max, sy: (p.y * k) / max, px: p.x, py: p.y, max };
+}
+
 function onTouchStart(e) {
-  if (!touchMode) {
-    showTouch(true);
-    pointerReady = true;
-    startEl.classList.add("hidden");
-  }
+  if (!touchMode) showTouch(true);
+  if (!playing) startPlay();
+  if (paused) return;
   for (const t of e.changedTouches) {
-    const ev = { clientX: t.clientX, clientY: t.clientY };
-    const vaultR = btnVault.getBoundingClientRect();
-    const slideR = btnSlide.getBoundingClientRect();
-    if (t.clientX >= vaultR.left && t.clientX <= vaultR.right && t.clientY >= vaultR.top && t.clientY <= vaultR.bottom) {
-      btnVault.classList.add("active");
-      tryVault();
-      continue;
-    }
-    if (t.clientX >= slideR.left && t.clientX <= slideR.right && t.clientY >= slideR.top && t.clientY <= slideR.bottom) {
-      btnSlide.classList.add("active");
-      trySlide();
-      continue;
-    }
-    const mid = window.innerWidth * 0.5;
-    if (t.clientX < mid && moveStick.id < 0) {
+    const p = toGamePoint(t.clientX, t.clientY);
+    if (inLayoutBox(btnVault, p.x, p.y)) { btnVault.classList.add("active"); tryVault(); continue; }
+    if (inLayoutBox(btnSlide, p.x, p.y)) { btnSlide.classList.add("active"); trySlide(); continue; }
+    const mid = gameSize().w * 0.5;
+    if (p.x < mid && moveStick.id < 0) {
       moveStick.id = t.identifier;
-      const p = stickPos(stickL, ev);
-      const max = 46;
-      const len = Math.hypot(p.x, p.y);
-      const k = len > max ? max / len : 1;
-      moveStick.x = (p.x * k) / max;
-      moveStick.y = (p.y * k) / max;
-      setKnob(knobL, p.x, p.y, max);
-    } else if (t.clientX >= mid && aimStick.id < 0) {
+      const s = stickFromPoint(stickL, p.x, p.y);
+      moveStick.x = s.sx; moveStick.y = s.sy;
+      setKnob(knobL, s.px, s.py, s.max);
+    } else if (p.x >= mid && aimStick.id < 0) {
       aimStick.id = t.identifier;
-      aimStick.firing = true;
-      aimStick.x = 0;
-      aimStick.y = 0;
-      setKnob(knobR, 0, 0, 46);
+      const s = stickFromPoint(stickR, p.x, p.y);
+      aimStick.x = s.sx; aimStick.y = s.sy;
+      aimStick.mag = Math.hypot(s.sx, s.sy);
+      setKnob(knobR, s.px, s.py, s.max);
     }
   }
 }
 function onTouchMove(e) {
   e.preventDefault();
+  if (paused) return;
   for (const t of e.changedTouches) {
-    const ev = { clientX: t.clientX, clientY: t.clientY };
+    const p = toGamePoint(t.clientX, t.clientY);
     if (t.identifier === moveStick.id) {
-      const p = stickPos(stickL, ev);
-      const max = 46;
-      const len = Math.hypot(p.x, p.y);
-      const k = len > max ? max / len : 1;
-      moveStick.x = (p.x * k) / max;
-      moveStick.y = (p.y * k) / max;
-      setKnob(knobL, p.x, p.y, max);
+      const s = stickFromPoint(stickL, p.x, p.y);
+      moveStick.x = s.sx; moveStick.y = s.sy;
+      setKnob(knobL, s.px, s.py, s.max);
     } else if (t.identifier === aimStick.id) {
-      const p = stickPos(stickR, ev);
-      const max = 46;
-      const len = Math.hypot(p.x, p.y);
-      const k = len > max ? max / len : 1;
-      aimStick.x = (p.x * k) / max;
-      aimStick.y = (p.y * k) / max;
-      setKnob(knobR, p.x, p.y, max);
+      const s = stickFromPoint(stickR, p.x, p.y);
+      aimStick.x = s.sx; aimStick.y = s.sy;
+      aimStick.mag = Math.hypot(s.sx, s.sy);
+      setKnob(knobR, s.px, s.py, s.max);
     }
   }
 }
@@ -466,7 +685,7 @@ function endTouch(id) {
     moveStick.id = -1; moveStick.x = 0; moveStick.y = 0; resetKnob(knobL);
   }
   if (id === aimStick.id) {
-    aimStick.id = -1; aimStick.x = 0; aimStick.y = 0; aimStick.firing = false; resetKnob(knobR);
+    aimStick.id = -1; aimStick.x = 0; aimStick.y = 0; aimStick.mag = 0; resetKnob(knobR);
   }
 }
 function onTouchEnd(e) {
@@ -479,37 +698,36 @@ touchEl.addEventListener("touchstart", onTouchStart, { passive: false });
 touchEl.addEventListener("touchmove", onTouchMove, { passive: false });
 touchEl.addEventListener("touchend", onTouchEnd);
 touchEl.addEventListener("touchcancel", onTouchEnd);
-window.addEventListener("touchstart", (e) => {
-  if (!startEl.classList.contains("hidden")) return;
-  if (!touchMode) {
-    showTouch(true);
-    pointerReady = true;
-  }
-}, { passive: true });
 
 bindKeys();
 
 function wishDir() {
-  let x = 0, z = 0;
+  let sx = 0, sy = 0;
   if (touchMode) {
-    x += moveStick.x;
-    z -= moveStick.y;
+    sx = moveStick.x;
+    sy = -moveStick.y;
+    if (settings.invertMove) { sx = -sx; sy = -sy; }
   } else {
-    if (keys.KeyW || keys.ArrowUp) z += 1;
-    if (keys.KeyS || keys.ArrowDown) z -= 1;
-    if (keys.KeyA || keys.ArrowLeft) x -= 1;
-    if (keys.KeyD || keys.ArrowRight) x += 1;
+    if (keys.KeyW || keys.ArrowUp) sy += 1;
+    if (keys.KeyS || keys.ArrowDown) sy -= 1;
+    if (keys.KeyA || keys.ArrowLeft) sx -= 1;
+    if (keys.KeyD || keys.ArrowRight) sx += 1;
+    if (settings.invertMove && isTop()) { sx = -sx; sy = -sy; }
   }
-  const len = Math.hypot(x, z);
-  if (len > 1) { x /= len; z /= len; }
+  const len = Math.hypot(sx, sy);
+  if (len > 1) { sx /= len; sy /= len; }
+  const mag = Math.min(1, len);
+  if (isTop()) {
+    return { x: sx, z: -sy, lx: sx, lz: sy, mag };
+  }
   const c = Math.cos(player.yaw), s = Math.sin(player.yaw);
-  return { x: x * c + z * s, z: -x * s + z * c, lx: x, lz: z, mag: Math.min(1, len) };
+  return { x: sx * c + sy * s, z: -sx * s + sy * c, lx: sx, lz: sy, mag };
 }
 
 function sprinting(wish) {
   if (player.stance !== "stand") return false;
   const key = keys.ShiftLeft || keys.ShiftRight;
-  const mobileSprint = touchMode && wish.mag > 0.85 && wish.lz > 0.35;
+  const mobileSprint = touchMode && wish.mag > 0.85;
   return (key || mobileSprint) && wish.mag > 0.15;
 }
 
@@ -563,7 +781,6 @@ function findVault() {
     if (dist > 1.25 || dist < 0.15) continue;
     const toward = (dx * dirx + dz * dirz) / (dist || 1);
     if (toward < 0.25) continue;
-    const depth = Math.abs(dx * dirx + dz * dirz);
     const landX = player.pos.x + dirx * (dist + Math.max(o.maxX - o.minX, o.maxZ - o.minZ) * 0.55 + RADIUS + 0.18);
     const landZ = player.pos.z + dirz * (dist + Math.max(o.maxX - o.minX, o.maxZ - o.minZ) * 0.55 + RADIUS + 0.18);
     if (blockedAt(landX, landZ, RADIUS * 0.9)) continue;
@@ -573,13 +790,12 @@ function findVault() {
 }
 
 function tryVault() {
-  if (player.vault || player.stance === "slide") return;
+  if (!gameActive() || player.vault || player.stance === "slide") return;
   const hit = findVault();
   if (!hit) return;
   player.stance = "vault";
   player.vault = {
-    t: 0,
-    dur: 0.38,
+    t: 0, dur: 0.38,
     sx: player.pos.x, sz: player.pos.z,
     ex: hit.landX, ez: hit.landZ,
     h: hit.h,
@@ -588,7 +804,7 @@ function tryVault() {
 }
 
 function trySlide() {
-  if (player.stance !== "stand" || player.vault) return;
+  if (!gameActive() || player.stance !== "stand" || player.vault) return;
   const spd = Math.hypot(player.vel.x, player.vel.z);
   const dirx = Math.sin(player.yaw);
   const dirz = Math.cos(player.yaw);
@@ -596,21 +812,17 @@ function trySlide() {
     player.vel.x += dirx * 6;
     player.vel.z += dirz * 6;
   } else {
-    const k = SLIDE_BOOST / spd;
-    player.vel.x *= Math.max(1, k * 0.92);
-    player.vel.z *= Math.max(1, k * 0.92);
-    const boost = SLIDE_BOOST;
     const nx = player.vel.x, nz = player.vel.z;
     const n = Math.hypot(nx, nz) || 1;
-    player.vel.x = (nx / n) * Math.max(n, boost);
-    player.vel.z = (nz / n) * Math.max(n, boost);
+    player.vel.x = (nx / n) * Math.max(n, SLIDE_BOOST);
+    player.vel.z = (nz / n) * Math.max(n, SLIDE_BOOST);
   }
   player.stance = "slide";
   player.slideT = 0.58;
 }
 
 function startReload() {
-  if (player.reloadT > 0 || player.mag >= MAG || player.reserve <= 0) return;
+  if (!gameActive() || player.reloadT > 0 || player.mag >= MAG || player.reserve <= 0) return;
   player.reloadT = RELOAD_S;
 }
 
@@ -624,7 +836,6 @@ function applyFriction(dt, amount) {
 }
 
 function accelerate(wx, wz, speed, dt) {
-  const wishX = wx * speed, wishZ = wz * speed;
   const cur = player.vel.x * wx + player.vel.z * wz;
   const add = speed - cur;
   if (add <= 0) return;
@@ -633,13 +844,46 @@ function accelerate(wx, wz, speed, dt) {
   player.vel.z += wz * acc;
 }
 
+function aimFromGround() {
+  const { w, h } = gameSize();
+  tmp.n.set((mouse.gx / w) * 2 - 1, -((mouse.gy / h) * 2 - 1));
+  tmp.r.setFromCamera(tmp.n, camera);
+  const hit = tmp.v;
+  if (!tmp.r.ray.intersectPlane(groundPlane, hit)) return;
+  aimPoint.set(hit.x, 0.03, hit.z);
+  const dx = hit.x - player.pos.x, dz = hit.z - player.pos.z;
+  if (dx * dx + dz * dz > 0.05) return Math.atan2(dx, dz);
+  return null;
+}
+
 function updateLook(dt) {
+  const turn = 10 * aimMul();
+  if (isTop()) {
+    if (touchMode) {
+      if (aimStick.mag > AIM_DEAD) {
+        const target = Math.atan2(aimStick.x, aimStick.y);
+        player.yaw = dampAngle(player.yaw, target, turn, dt);
+        aimPoint.set(
+          player.pos.x + Math.sin(player.yaw) * 4.5,
+          0.03,
+          player.pos.z + Math.cos(player.yaw) * 4.5
+        );
+      }
+    } else {
+      const yaw = aimFromGround();
+      if (yaw != null) player.yaw = dampAngle(player.yaw, yaw, turn, dt);
+    }
+    player.pitch = damp(player.pitch, 0.08, 8, dt);
+    return;
+  }
   if (touchMode) {
-    player.yaw -= aimStick.x * TOUCH_SENS * 860 * dt;
-    player.pitch += aimStick.y * TOUCH_SENS * 860 * dt;
+    const sens = FPS_LOOK_BASE * fpsMul() * 520;
+    player.yaw -= aimStick.x * sens * dt;
+    player.pitch += aimStick.y * sens * dt;
   } else {
-    player.yaw -= mouse.lx * LOOK_SENS;
-    player.pitch += mouse.ly * LOOK_SENS;
+    const sens = FPS_LOOK_BASE * fpsMul();
+    player.yaw -= mouse.lx * sens;
+    player.pitch += mouse.ly * sens;
     mouse.lx = 0;
     mouse.ly = 0;
   }
@@ -654,17 +898,15 @@ function updateMove(dt) {
     const e = u * u * (3 - 2 * u);
     player.pos.x = v.sx + (v.ex - v.sx) * e;
     player.pos.z = v.sz + (v.ez - v.sz) * e;
-    const arc = Math.sin(u * Math.PI);
-    player.pos.y = (v.h + 0.28) * arc;
+    player.pos.y = (v.h + 0.28) * Math.sin(u * Math.PI);
     if (u >= 1) {
       player.pos.y = 0;
       const landed = collideXZ(player.pos.x, player.pos.z, RADIUS);
       player.pos.x = landed.x; player.pos.z = landed.z;
       player.vault = null;
       player.stance = "stand";
-      const dirx = Math.sin(player.yaw), dirz = Math.cos(player.yaw);
-      player.vel.x = dirx * 5.2;
-      player.vel.z = dirz * 5.2;
+      player.vel.x = Math.sin(player.yaw) * 5.2;
+      player.vel.z = Math.cos(player.yaw) * 5.2;
     }
     return;
   }
@@ -679,7 +921,6 @@ function updateMove(dt) {
     if (player.slideT <= 0) player.stance = "stand";
   } else if (wish.mag > 0.04) {
     applyFriction(dt, FRICTION * 0.45);
-    const inv = 1 / (wish.mag || 1);
     accelerate(wish.x, wish.z, speed * wish.mag, dt);
   } else {
     applyFriction(dt, FRICTION * 1.35);
@@ -693,12 +934,15 @@ function updateMove(dt) {
   player.pos.x = hit.x;
   player.pos.z = hit.z;
   player.pos.y = 0;
-
-  const spd = Math.hypot(player.vel.x, player.vel.z);
-  player.bob += spd * dt * 1.7;
+  player.bob += Math.hypot(player.vel.x, player.vel.z) * dt * 1.7;
 }
 
 function muzzleWorld(out) {
+  if (!isTop() && viewGun.visible) {
+    viewGun.updateWorldMatrix(true, false);
+    out.set(0.22, -0.18, -0.2).applyMatrix4(viewGun.matrixWorld);
+    return out;
+  }
   const g = soldier.userData.gun;
   g.updateWorldMatrix(true, false);
   out.set(0, 0, 0.62).applyMatrix4(g.matrixWorld);
@@ -730,18 +974,14 @@ function dummyHitTest(origin, dir, maxD) {
   const o = origin, d = dir;
   for (const dum of dummies) {
     if (dum.state === "down") continue;
-    const cx = dum.root.position.x;
-    const cy = 0.9;
-    const cz = dum.root.position.z;
+    const cx = dum.root.position.x, cy = 0.9, cz = dum.root.position.z;
     const px = cx - o.x, py = cy - o.y, pz = cz - o.z;
     const t = px * d.x + py * d.y + pz * d.z;
     if (t < 0 || t > bestD) continue;
     const qx = o.x + d.x * t - cx;
     const qy = o.y + d.y * t - cy;
     const qz = o.z + d.z * t - cz;
-    const rad = 0.55;
-    const hh = 1.05;
-    if (qx * qx + qz * qz < rad * rad && Math.abs(qy) < hh) {
+    if (qx * qx + qz * qz < 0.55 * 0.55 && Math.abs(qy) < 1.05) {
       bestD = t;
       best = dum;
     }
@@ -752,15 +992,14 @@ function dummyHitTest(origin, dir, maxD) {
 function worldHit(origin, dir, maxD) {
   let best = maxD, pt = null;
   for (const o of obstacles) {
-    const min = tmp.v.set(o.minX, 0, o.minZ);
-    const max = tmp.w.set(o.maxX, o.h, o.maxZ);
+    const minx = o.minX, miny = 0, minz = o.minZ, maxx = o.maxX, maxy = o.h, maxz = o.maxZ;
     const invX = 1 / (dir.x || 1e-8), invY = 1 / (dir.y || 1e-8), invZ = 1 / (dir.z || 1e-8);
-    let t1 = (min.x - origin.x) * invX, t2 = (max.x - origin.x) * invX;
+    let t1 = (minx - origin.x) * invX, t2 = (maxx - origin.x) * invX;
     let tmin = Math.min(t1, t2), tmax = Math.max(t1, t2);
-    t1 = (min.y - origin.y) * invY; t2 = (max.y - origin.y) * invY;
+    t1 = (miny - origin.y) * invY; t2 = (maxy - origin.y) * invY;
     tmin = Math.max(tmin, Math.min(t1, t2));
     tmax = Math.min(tmax, Math.max(t1, t2));
-    t1 = (min.z - origin.z) * invZ; t2 = (max.z - origin.z) * invZ;
+    t1 = (minz - origin.z) * invZ; t2 = (maxz - origin.z) * invZ;
     tmin = Math.max(tmin, Math.min(t1, t2));
     tmax = Math.min(tmax, Math.max(t1, t2));
     if (tmax >= tmin && tmin > 0.05 && tmin < best) {
@@ -783,30 +1022,37 @@ function hurtDummy(dum) {
 }
 
 function fire() {
-  if (!pointerReady) return;
-  if (player.reloadT > 0 || player.stance === "vault") return;
+  if (!gameActive() || player.reloadT > 0 || player.stance === "vault") return;
   if (player.mag <= 0) { startReload(); return; }
   const now = performance.now();
   if (now - player.lastShot < FIRE_MS) return;
   player.lastShot = now;
   player.mag -= 1;
-  cam.kickP += 0.028;
-  cam.kickY += (Math.random() - 0.5) * 0.018;
-  cam.punch += 0.12;
+  cam.kickP += isTop() ? 0.006 : 0.024;
+  cam.kickY += (Math.random() - 0.5) * (isTop() ? 0.004 : 0.014);
+  cam.punch += isTop() ? 0.04 : 0.12;
   muzzleT = 0.045;
 
-  const origin = camera.position;
-  const dir = tmp.q.set(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
-  const world = worldHit(origin, dir, 80);
-  const dum = dummyHitTest(origin, dir, world.dist);
+  let origin, dir;
+  if (isTop()) {
+    origin = tmp.q.set(player.pos.x, 1.15, player.pos.z);
+    dir = tmp.v.set(Math.sin(player.yaw), -0.02, Math.cos(player.yaw)).normalize();
+  } else {
+    origin = camera.position;
+    dir = tmp.q.set(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+  }
+  const originCopy = origin.clone();
+  const dirCopy = dir.clone();
+  const world = worldHit(originCopy, dirCopy, 80);
+  const dum = dummyHitTest(originCopy, dirCopy, world.dist);
   let end;
   if (dum) {
-    end = origin.clone().addScaledVector(dir, dum.dist);
+    end = originCopy.clone().addScaledVector(dirCopy, dum.dist);
     hurtDummy(dum.dum);
   } else if (world.pt) {
     end = world.pt;
   } else {
-    end = origin.clone().addScaledVector(dir, 70);
+    end = originCopy.clone().addScaledVector(dirCopy, 70);
   }
   const muz = muzzleWorld(tmp.w);
   spawnTracer(muz.x, muz.y, muz.z, end.x, end.y, end.z);
@@ -815,7 +1061,7 @@ function fire() {
 }
 
 function updateShoot(dt) {
-  const holding = touchMode ? aimStick.firing : mouse.down;
+  const holding = touchMode ? (isTop() ? aimStick.mag >= FIRE_STICK : aimStick.mag > AIM_DEAD) : mouse.down;
   if (holding) fire();
   if (player.reloadT > 0) {
     player.reloadT -= dt;
@@ -838,8 +1084,7 @@ function updateDummies(dt) {
     }
     if (d.state === "down") {
       d.t += dt;
-      const k = clamp(d.t / 0.35, 0, 1);
-      d.root.rotation.x = k * 1.45;
+      d.root.rotation.x = clamp(d.t / 0.35, 0, 1) * 1.45;
       d.root.position.y = 0;
       if (d.t > 2.4) {
         d.state = "idle";
@@ -850,17 +1095,15 @@ function updateDummies(dt) {
       continue;
     }
     d.strafe += dt * 0.7;
-    const ox = Math.sin(d.strafe) * 0.55;
-    const oz = Math.cos(d.strafe * 0.7) * 0.35;
-    const nx = d.homeX + ox, nz = d.homeZ + oz;
+    const nx = d.homeX + Math.sin(d.strafe) * 0.55;
+    const nz = d.homeZ + Math.cos(d.strafe * 0.7) * 0.35;
     if (!blockedAt(nx, nz, 0.4)) {
       d.root.position.x = nx;
       d.root.position.z = nz;
     }
     const dx = player.pos.x - d.root.position.x;
     const dz = player.pos.z - d.root.position.z;
-    const want = Math.atan2(dx, dz);
-    d.root.rotation.y = damp(d.root.rotation.y, want, 3.2, dt);
+    d.root.rotation.y = damp(d.root.rotation.y, Math.atan2(dx, dz), 3.2, dt);
   }
 }
 
@@ -882,11 +1125,8 @@ function updateFx(dt) {
   }
   if (muzzleT > 0) {
     muzzleT -= dt;
-    const g = soldier.userData.gun;
-    g.updateWorldMatrix(true, false);
-    tmp.v.set(0, 0, 0.55).applyMatrix4(g.matrixWorld);
+    muzzleWorld(tmp.v);
     muzzleFlash.position.copy(tmp.v);
-    muzzleFlash.quaternion.copy(g.getWorldQuaternion(tmp.quat));
     muzzleFlash.visible = true;
     muzzleLight.position.copy(tmp.v);
     muzzleLight.intensity = 3.2;
@@ -901,8 +1141,7 @@ function updateFx(dt) {
 }
 
 function updateSoldier(dt) {
-  const targetYaw = player.yaw;
-  player.bodyYaw = damp(player.bodyYaw, targetYaw, 11, dt);
+  player.bodyYaw = dampAngle(player.bodyYaw, player.yaw, 12, dt);
   soldier.position.set(player.pos.x, player.pos.y, player.pos.z);
   soldier.rotation.set(0, player.bodyYaw, 0);
   const u = soldier.userData;
@@ -923,36 +1162,45 @@ function updateSoldier(dt) {
     u.rLeg.rotation.x = -bob * 0.55;
     u.lArm.rotation.x = -bob * 0.25;
     u.rArm.rotation.x = bob * 0.2;
-    u.gun.rotation.x = player.pitch * 0.15;
+    u.gun.rotation.x = isTop() ? 0 : player.pitch * 0.12;
     u.torso.position.y = 1.12 + Math.abs(bob) * 0.02;
   }
 }
 
 function updateCamera(dt) {
+  if (isTop()) {
+    const ahead = 2.15;
+    const lx = player.pos.x + Math.sin(player.yaw) * ahead;
+    const lz = player.pos.z + Math.cos(player.yaw) * ahead;
+    const lift = CAM_DIST * Math.sin(CAM_TILT);
+    const back = CAM_DIST * Math.cos(CAM_TILT);
+    tmp.w.set(lx, player.pos.y + lift, lz + back);
+    dampV(cam.pos, tmp.w, 7.5, dt);
+    camera.position.copy(cam.pos);
+    camera.rotation.order = "YXZ";
+    camera.rotation.y = 0;
+    camera.rotation.x = -CAM_TILT + cam.kickP * 0.25;
+    camera.rotation.z = 0;
+    const wantFov = sprinting(wishDir()) ? 55 : 52;
+    cam.fov = damp(cam.fov, wantFov, 6, dt);
+    if (Math.abs(camera.fov - cam.fov) > 0.05) {
+      camera.fov = cam.fov;
+      camera.updateProjectionMatrix();
+    }
+    aimMark.position.set(aimPoint.x, 0.04, aimPoint.z);
+    return;
+  }
   const pitch = player.pitch + cam.kickP;
   const yaw = player.yaw + cam.kickY;
-  const standH = player.stance === "slide" ? 0.72 : 1.52;
-  const shoulder = 0.7;
-  const dist = 3.15 + cam.punch;
-  const cy = Math.cos(yaw), sy = Math.sin(yaw);
-  const cp = Math.cos(pitch), sp = Math.sin(pitch);
-  const lookx = sy * cp, looky = -sp, lookz = cy * cp;
-  const rightx = cy, rightz = -sy;
-  tmp.v.set(
-    player.pos.x - lookx * dist - rightx * shoulder,
-    player.pos.y + standH - looky * dist,
-    player.pos.z - lookz * dist - rightz * shoulder
-  );
-  dampV(cam.pos, tmp.v, 16, dt);
-  const wish = wishDir();
-  cam.roll = damp(cam.roll, -wish.lx * 0.045, 8, dt);
+  const standH = player.stance === "slide" ? 0.62 : 1.52;
+  tmp.w.set(player.pos.x, player.pos.y + standH, player.pos.z);
+  dampV(cam.pos, tmp.w, 22, dt);
   camera.position.copy(cam.pos);
   camera.rotation.order = "YXZ";
   camera.rotation.y = yaw + Math.PI;
   camera.rotation.x = -pitch;
-  camera.rotation.z = cam.roll;
-
-  const wantFov = sprinting(wish) ? 67 : 62;
+  camera.rotation.z = 0;
+  const wantFov = sprinting(wishDir()) ? 76 : 72;
   cam.fov = damp(cam.fov, wantFov, 6, dt);
   if (Math.abs(camera.fov - cam.fov) > 0.05) {
     camera.fov = cam.fov;
@@ -971,7 +1219,7 @@ function updateHud() {
 
 function frame() {
   const dt = Math.min(0.033, clock.getDelta());
-  if (pointerReady) {
+  if (gameActive()) {
     updateLook(dt);
     updateMove(dt);
     updateShoot(dt);
@@ -986,6 +1234,11 @@ function frame() {
 }
 
 if (isTouchDevice()) showTouch(true);
+applyCameraMode();
+if (settings.landscape && isTouchDevice()) {
+  // Do not auto-lock orientation; the pause-menu toggle must be a user gesture.
+  syncUi();
+}
 requestAnimationFrame(frame);
   </script>
 </body>
