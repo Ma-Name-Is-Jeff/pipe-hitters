@@ -264,7 +264,8 @@ const EXTRACT = { x: 0, z: -88, r: 4.6 };
 const AIM_CONE = 14 * Math.PI / 180;
 const AIM_SPEED = 0.5;
 const STORE = "pipe-hitters-settings";
-const FPS_LOOK_BASE = 0.00085;
+const FPS_LOOK_MOUSE = 0.004;
+const FPS_LOOK_STICK = 2.2;
 
 const settings = { camera: "top", invertMove: false, landscape: false, aimSens: 70, fpsSens: 45, assist: 70, volume: 70 };
 try {
@@ -1413,7 +1414,9 @@ function dampAngle(cur, target, lambda, dt) {
 }
 function isTop() { return settings.camera !== "fps"; }
 function aimMul() { return settings.aimSens / 100; }
-function fpsMul() { return settings.fpsSens / 100; }
+function fpsMul() { return (Number(settings.fpsSens) || 45) / 100; }
+function fpsMouseSens() { return FPS_LOOK_MOUSE * fpsMul(); }
+function fpsStickSens() { return FPS_LOOK_STICK * fpsMul(); }
 
 function saveSettings() {
   try { localStorage.setItem(STORE, JSON.stringify(settings)); } catch {}
@@ -1702,7 +1705,7 @@ function bindKeys() {
       lookPan.ly = p.y;
       return;
     }
-    if (!isTop() && document.pointerLockElement === canvas) {
+    if (!isTop() && (document.pointerLockElement === canvas || e.target === canvas)) {
       mouse.lx += e.movementX;
       mouse.ly += e.movementY;
     }
@@ -2305,11 +2308,11 @@ function updateLook(dt) {
   }
   assistTarget = null;
   if (touchMode) {
-    const sens = FPS_LOOK_BASE * fpsMul() * 520;
+    const sens = fpsStickSens();
     player.yaw -= aimStick.x * sens * dt;
     player.pitch += aimStick.y * sens * dt;
   } else {
-    const sens = FPS_LOOK_BASE * fpsMul();
+    const sens = fpsMouseSens();
     player.yaw -= mouse.lx * sens;
     player.pitch += mouse.ly * sens;
     mouse.lx = 0;
