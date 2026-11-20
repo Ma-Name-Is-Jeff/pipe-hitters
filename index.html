@@ -2063,6 +2063,44 @@ function collideXZ(x, z, rad) {
   return { x, z };
 }
 
+function collideCharacters(x, z, rad) {
+  let hit = false;
+  for (const d of dummies) {
+    if (d.state === "down") continue;
+    const ox = d.root.position.x, oz = d.root.position.z;
+    const dx = x - ox, dz = z - oz;
+    const dist = Math.hypot(dx, dz);
+    const min = rad + 0.36;
+    if (dist >= min) continue;
+    hit = true;
+    if (dist < 1e-6) { x += min; continue; }
+    const f = min / dist;
+    x = ox + dx * f;
+    z = oz + dz * f;
+  }
+  return { x, z, hit };
+}
+
+function slideBlocked(intendedX, intendedZ, resolvedX, resolvedZ, thresh) {
+  return Math.hypot(resolvedX - intendedX, resolvedZ - intendedZ) > (thresh == null ? 0.008 : thresh);
+}
+
+function resolveSlideMove(x, z, rad) {
+  const world = collideXZ(x, z, rad);
+  const acts = collideCharacters(world.x, world.z, rad);
+  return { x: acts.x, z: acts.z, blocked: acts.hit || slideBlocked(x, z, acts.x, acts.z) };
+}
+
+function endSlideImpact() {
+  if (player.stance !== "slide") return;
+  player.stance = "stand";
+  player.slideT = 0;
+  player.vel.set(0, 0, 0);
+  cam.kickP += isTop() ? 0.055 : 0.09;
+  cam.kickY += (Math.random() - 0.5) * 0.045;
+  cam.punch += isTop() ? 0.2 : 0.24;
+}
+
 function blockedAt(x, z, rad) {
   for (const o of obstacles) {
     if (o.h < 0.35) continue;
@@ -2357,6 +2395,7 @@ function updateMove(dt) {
     }
   }
 
+  let slid = false;
   if (player.stance === "slide") {
     player.slideT -= dt;
     const n = Math.hypot(player.vel.x, player.vel.z) || 1;
@@ -2366,7 +2405,19 @@ function updateMove(dt) {
     const vx = player.vel.x / n, vz = player.vel.z / n;
     const vaultHit = findVault(vx, vz);
     if (vaultHit && vaultHit.dist < 0.95) { tryVault(vaultHit); return; }
-    if (player.slideT <= 0) player.stance = "stand";
+    const stepLen = Math.hypot(player.vel.x * dt, player.vel.z * dt);
+    const steps = Math.max(1, Math.ceil(stepLen / 0.1));
+    const sdt = dt / steps;
+    for (let i = 0; i < steps; i++) {
+      const ix = player.pos.x + player.vel.x * sdt;
+      const iz = player.pos.z + player.vel.z * sdt;
+      const res = resolveSlideMove(ix, iz, RADIUS);
+      player.pos.x = res.x;
+      player.pos.z = res.z;
+      if (res.blocked) { endSlideImpact(); break; }
+    }
+    slid = true;
+    if (player.stance === "slide" && player.slideT <= 0) player.stance = "stand";
   } else if (wish.mag > 0.04) {
     applyFriction(dt, FRICTION * 0.45);
     accelerate(wish.x, wish.z, speed * wish.mag, dt);
@@ -2374,8 +2425,10 @@ function updateMove(dt) {
     applyFriction(dt, FRICTION * 1.35);
   }
 
-  player.pos.x += player.vel.x * dt;
-  player.pos.z += player.vel.z * dt;
+  if (!slid) {
+    player.pos.x += player.vel.x * dt;
+    player.pos.z += player.vel.z * dt;
+  }
   const hit = collideXZ(player.pos.x, player.pos.z, RADIUS);
   if (hit.x !== player.pos.x) player.vel.x = 0;
   if (hit.z !== player.pos.z) player.vel.z = 0;
