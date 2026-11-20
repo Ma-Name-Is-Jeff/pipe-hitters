@@ -150,11 +150,11 @@
     <button id="btnPause" class="hidden" type="button" aria-label="Pause">II</button>
     <div id="start">
       <h1>PIPE HITTERS</h1>
-      <p>Click or tap to start. Move with the left stick or WASD, aim with the right stick or the mouse, and clear the test yard.</p>
+      <p>Click or tap to start. Move with the left stick or WASD, aim with the right stick or the mouse, and push north through the compound to the gate.</p>
     </div>
     <div id="fail" class="hidden">
       <h2>DOWN</h2>
-      <p>You were dropped in the yard. Try again from the start.</p>
+      <p>You were dropped in the compound. Try again from the south court.</p>
       <button id="btnRetry" type="button">Try again</button>
     </div>
     <div id="done" class="hidden">
@@ -193,6 +193,7 @@
   </script>
   <script type="module">
 import * as THREE from "three";
+import { mergeGeometries } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/utils/BufferGeometryUtils.js";
 
 const gameEl = document.getElementById("game");
 const canvas = document.getElementById("c");
@@ -243,10 +244,13 @@ const STAND_H = 1.7;
 const VAULT_MAX = 1.15;
 const VAULT_MIN = 0.32;
 const CAM_TILT = 60 * Math.PI / 180;
-const CAM_DIST = 15.5;
+const CAM_DIST = 16.5;
 const AIM_DEAD = 0.16;
 const FIRE_STICK = 0.75;
-const AIM_RANGE = 16;
+const AIM_RANGE = 22;
+const WORLD = 202.5;
+const START = { x: 0, z: 175, yaw: Math.PI };
+const EXTRACT = { x: 0, z: -176, r: 5.2 };
 const AIM_CONE = 14 * Math.PI / 180;
 const AIM_SPEED = 0.5;
 const STORE = "pipe-hitters-settings";
@@ -276,7 +280,7 @@ let lastEmpty = 0;
 const stats = { kills: 0, shots: 0, hits: 0, start: 0 };
 
 const player = {
-  pos: new THREE.Vector3(0, 0, 14),
+  pos: new THREE.Vector3(START.x, 0, START.z),
   vel: new THREE.Vector3(),
   yaw: Math.PI,
   bodyYaw: Math.PI,
@@ -307,7 +311,7 @@ const player = {
 };
 
 const cam = {
-  pos: new THREE.Vector3(0, CAM_DIST * Math.sin(CAM_TILT), 14 + CAM_DIST * Math.cos(CAM_TILT)),
+  pos: new THREE.Vector3(START.x, CAM_DIST * Math.sin(CAM_TILT), START.z + CAM_DIST * Math.cos(CAM_TILT)),
   kickP: 0,
   kickY: 0,
   punch: 0,
@@ -331,18 +335,31 @@ let hitFlash = 0;
 let muzzleT = 0;
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x8a9aa3);
-scene.fog = new THREE.Fog(0x8a9aa3, 28, 80);
+scene.background = new THREE.Color(0x8a948c);
+scene.fog = new THREE.Fog(0x8a948c, 42, 155);
 
-const camera = new THREE.PerspectiveCamera(52, 1, 0.08, 140);
+const camera = new THREE.PerspectiveCamera(52, 1, 0.08, 280);
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
 
-scene.add(new THREE.HemisphereLight(0xc9d4dc, 0x3a3a32, 1.05));
-const sun = new THREE.DirectionalLight(0xfff2da, 0.85);
-sun.position.set(18, 28, 10);
+scene.add(new THREE.HemisphereLight(0xc9d4dc, 0x3a3a32, 1.0));
+const sun = new THREE.DirectionalLight(0xfff2da, 0.9);
+sun.position.set(START.x + 16, 30, START.z + 10);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.camera.near = 2;
+sun.shadow.camera.far = 70;
+sun.shadow.camera.left = -22;
+sun.shadow.camera.right = 22;
+sun.shadow.camera.top = 22;
+sun.shadow.camera.bottom = -22;
+sun.shadow.bias = -0.002;
+sun.shadow.normalBias = 0.03;
 scene.add(sun);
+scene.add(sun.target);
 
 function boxMesh(w, h, d, color, x, y, z) {
   const m = new THREE.Mesh(
@@ -353,60 +370,219 @@ function boxMesh(w, h, d, color, x, y, z) {
   return m;
 }
 
-function addObstacle(x, y, z, w, h, d, color, vaultable) {
-  const mesh = boxMesh(w, h, d, color, x, y + h * 0.5, z);
-  scene.add(mesh);
-  const hx = w * 0.5, hz = d * 0.5;
-  obstacles.push({
-    mesh,
-    minX: x - hx, maxX: x + hx,
-    minZ: z - hz, maxZ: z + hz,
-    y: 0, h, vaultable: !!vaultable,
-  });
-  return mesh;
+const COL = {
+  ground: 0x5c615a,
+  pad: 0x656a62,
+  floor: 0x55564f,
+  road: 0x61645c,
+  peri: 0x4a4e48,
+  wall: 0x8a8478,
+  crate: 0x6b5a43,
+  crate2: 0x5a4c38,
+  low: 0x7a6d4e,
+  cover: 0x5a635c,
+  extract: 0x3d5a48,
+  mark: 0xc4a24a,
+};
+
+const levelBatches = new Map();
+
+function addSolid(x, y, z, w, h, d, color, vaultable, deco) {
+  const geo = new THREE.BoxGeometry(w, h, d);
+  geo.translate(x, y + h * 0.5, z);
+  let b = levelBatches.get(color);
+  if (!b) { b = { geos: [] }; levelBatches.set(color, b); }
+  b.geos.push(geo);
+  if (!deco) {
+    const hx = w * 0.5, hz = d * 0.5;
+    obstacles.push({
+      mesh: null,
+      minX: x - hx, maxX: x + hx,
+      minZ: z - hz, maxZ: z + hz,
+      y: 0, h, vaultable: !!vaultable,
+    });
+  }
 }
 
-function buildYard() {
+function addObstacle(x, y, z, w, h, d, color, vaultable) {
+  addSolid(x, y, z, w, h, d, color, vaultable, false);
+}
+
+function addDeco(x, y, z, w, h, d, color) {
+  addSolid(x, y, z, w, h, d, color, false, true);
+}
+
+function wallSegs(center, length, door) {
+  const a = center - length * 0.5, b = center + length * 0.5;
+  if (door == null || door === false) return [[a, b]];
+  const spec = typeof door === "object" ? door : { off: +door || 0, width: 2.6 };
+  const dc = center + (spec.off || 0), hw = (spec.width || 2.6) * 0.5;
+  const segs = [];
+  if (dc - hw - a > 0.45) segs.push([a, dc - hw]);
+  if (b - (dc + hw) > 0.45) segs.push([dc + hw, b]);
+  return segs;
+}
+
+function addWallX(z, xCenter, length, door, h, color, thick) {
+  const t = thick || 0.48;
+  for (const [a, b] of wallSegs(xCenter, length, door)) {
+    addSolid((a + b) * 0.5, 0, z, b - a, h, t, color, false, false);
+  }
+}
+
+function addWallZ(x, zCenter, length, door, h, color, thick) {
+  const t = thick || 0.48;
+  for (const [a, b] of wallSegs(zCenter, length, door)) {
+    addSolid(x, 0, (a + b) * 0.5, t, h, b - a, color, false, false);
+  }
+}
+
+function addBuilding(cx, cz, w, d, doors, opt) {
+  const h = (opt && opt.h) || 2.9;
+  const col = (opt && opt.color) || COL.wall;
+  const t = 0.48;
+  const x0 = cx - w * 0.5, z0 = cz - d * 0.5, z1 = cz + d * 0.5;
+  addWallX(z0, cx, w, doors && doors.n, h, col, t);
+  addWallX(z1, cx, w, doors && doors.s, h, col, t);
+  addWallZ(x0, cz, d, doors && doors.w, h, col, t);
+  addWallZ(x0 + w, cz, d, doors && doors.e, h, col, t);
+  addDeco(cx, 0.02, cz, w - 0.6, 0.03, d - 0.6, COL.floor);
+  if (opt && opt.div === "z") addWallX(cz, cx, w - t * 2, opt.divDoor ?? 0, h, col, t);
+  if (opt && opt.div === "x") addWallZ(cx, cz, d - t * 2, opt.divDoor ?? 0, h, col, t);
+}
+
+function addCrate(x, z, s, color, h) {
+  addSolid(x, 0, z, s, h || s, s, color || COL.crate, (h || s) <= 1.15, false);
+}
+
+function addCluster(x, z) {
+  addCrate(x, z, 1.15, COL.crate, 1.05);
+  addCrate(x + 1.15, z + 0.7, 1.0, COL.crate2, 0.95);
+  addCrate(x + 0.2, z + 1.25, 0.9, COL.crate, 0.7);
+}
+
+function addHurdle(x, z, rot) {
+  if (rot) addSolid(x, 0, z, 0.28, 0.72, 2.5, COL.low, true, false);
+  else addSolid(x, 0, z, 2.5, 0.72, 0.28, COL.low, true, false);
+}
+
+function addLow(x, z, w, d, h) {
+  addSolid(x, 0, z, w, h || 0.82, d, COL.cover, true, false);
+}
+
+function flushLevel() {
+  for (const [color, b] of levelBatches) {
+    const merged = mergeGeometries(b.geos, false);
+    for (const g of b.geos) g.dispose();
+    if (!merged) continue;
+    const mesh = new THREE.Mesh(merged, new THREE.MeshLambertMaterial({ color }));
+    mesh.castShadow = false;
+    mesh.receiveShadow = true;
+    mesh.matrixAutoUpdate = false;
+    mesh.updateMatrix();
+    scene.add(mesh);
+  }
+  levelBatches.clear();
+}
+
+function buildCompound() {
   const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(44, 44),
-    new THREE.MeshLambertMaterial({ color: 0x4a5248 })
+    new THREE.PlaneGeometry(WORLD * 2 + 16, WORLD * 2 + 16),
+    new THREE.MeshLambertMaterial({ color: COL.ground })
   );
   ground.rotation.x = -Math.PI / 2;
+  ground.receiveShadow = true;
   scene.add(ground);
-  const pad = new THREE.Mesh(
-    new THREE.PlaneGeometry(40, 40),
-    new THREE.MeshLambertMaterial({ color: 0x555e52 })
+
+  const road = new THREE.Mesh(
+    new THREE.PlaneGeometry(28, WORLD * 2 - 8),
+    new THREE.MeshLambertMaterial({ color: COL.road })
   );
-  pad.rotation.x = -Math.PI / 2;
-  pad.position.y = 0.01;
-  scene.add(pad);
+  road.rotation.x = -Math.PI / 2;
+  road.position.y = 0.015;
+  road.receiveShadow = true;
+  scene.add(road);
 
-  addObstacle(0, 0, -20.4, 41.4, 2.2, 0.8, 0x3d4440, false);
-  addObstacle(0, 0, 20.4, 41.4, 2.2, 0.8, 0x3d4440, false);
-  addObstacle(-20.4, 0, 0, 0.8, 2.2, 41.4, 0x3d4440, false);
-  addObstacle(20.4, 0, 0, 0.8, 2.2, 41.4, 0x3d4440, false);
+  const startPad = new THREE.Mesh(
+    new THREE.PlaneGeometry(18, 16),
+    new THREE.MeshLambertMaterial({ color: COL.pad })
+  );
+  startPad.rotation.x = -Math.PI / 2;
+  startPad.position.set(START.x, 0.02, START.z);
+  startPad.receiveShadow = true;
+  scene.add(startPad);
 
-  const crate = 0x6b5a43;
-  const crate2 = 0x5a4c38;
-  const wall = 0x5a635c;
-  const low = 0x7a6d4e;
-  addObstacle(-4.2, 0, -1.2, 1.1, 1.0, 1.1, crate, true);
-  addObstacle(-3.1, 0, -2.2, 1.1, 1.0, 1.1, crate2, true);
-  addObstacle(5.4, 0, 2.0, 1.2, 1.05, 1.2, crate, true);
-  addObstacle(6.6, 0, 2.7, 1.0, 0.95, 1.0, crate2, true);
-  addObstacle(5.5, 0, 3.3, 1.0, 1.5, 1.0, crate, false);
-  addObstacle(-8.5, 0, 6.0, 3.6, 0.85, 0.45, low, true);
-  addObstacle(2.0, 0, -7.5, 5.5, 0.8, 0.42, low, true);
-  addObstacle(10.5, 0, -4.0, 0.42, 0.9, 4.8, low, true);
-  addObstacle(-12.0, 0, -8.0, 0.5, 1.8, 6.0, wall, false);
-  addObstacle(-10.5, 0, 11.5, 4.0, 1.9, 0.5, wall, false);
-  addObstacle(12.5, 0, 8.5, 1.15, 1.0, 1.15, crate, true);
-  addObstacle(13.6, 0, 8.0, 1.0, 0.7, 1.0, crate2, true);
-  addObstacle(-14.0, 0, 3.2, 1.2, 0.75, 2.4, low, true);
-  addObstacle(0.6, 0, 3.8, 1.05, 0.88, 1.05, crate, true);
-  addObstacle(-7.0, 0, -12.0, 2.4, 0.7, 0.4, low, true);
-  addObstacle(8.0, 0, -12.5, 1.1, 1.0, 1.1, crate, true);
-  addObstacle(-16.0, 0, 12.0, 1.0, 1.0, 1.0, crate2, true);
+  const exPad = new THREE.Mesh(
+    new THREE.PlaneGeometry(16, 14),
+    new THREE.MeshLambertMaterial({ color: COL.extract })
+  );
+  exPad.rotation.x = -Math.PI / 2;
+  exPad.position.set(EXTRACT.x, 0.02, EXTRACT.z);
+  exPad.receiveShadow = true;
+  scene.add(exPad);
+
+  const W = WORLD, periH = 3.4, periT = 1.5, gap = 9;
+  addWallX(-W, (-W - gap) * 0.5, W - gap, false, periH, COL.peri, periT);
+  addWallX(-W, (W + gap) * 0.5, W - gap, false, periH, COL.peri, periT);
+  addWallX(W, 0, W * 2 + periT, false, periH, COL.peri, periT);
+  addWallZ(-W, 0, W * 2 + periT, false, periH, COL.peri, periT);
+  addWallZ(W, 0, W * 2 + periT, false, periH, COL.peri, periT);
+
+  addBuilding(-52, 142, 64, 40, { e: 0, n: 10 }, { div: "x", divDoor: 4 });
+  addBuilding(54, 140, 64, 42, { w: 0, n: -8 }, { div: "x", divDoor: -4 });
+  addBuilding(-78, 42, 56, 44, { e: 0, s: 8 }, { div: "z", divDoor: 0 });
+  addBuilding(80, 36, 68, 48, { w: 2, n: -10 }, { div: "z", divDoor: 6 });
+  addBuilding(-88, -96, 80, 56, { e: -8, s: 10 }, { div: "x", divDoor: 0 });
+  addBuilding(78, -112, 52, 48, { w: 0, s: -6 }, { div: "z", divDoor: 0 });
+  addBuilding(28, -180, 18, 16, { w: 0 }, { h: 2.6 });
+
+  addCluster(-8, 162);
+  addCluster(11, 156);
+  addCluster(-22, 128);
+  addCluster(20, 124);
+  addCluster(8, 88);
+  addCluster(-14, 54);
+  addCluster(18, 22);
+  addCluster(-28, -8);
+  addCluster(10, -48);
+  addCluster(-40, -58);
+  addCluster(36, -78);
+  addCluster(-16, -150);
+  addCluster(12, -158);
+  addCrate(-6, 148, 1.0, COL.crate2, 1.5);
+  addCrate(24, -100, 1.2, COL.crate, 1.5);
+  addCrate(-170, 20, 1.3, COL.crate, 1.1);
+  addCrate(168, -30, 1.3, COL.crate2, 1.1);
+  addCrate(170, -28, 1.1, COL.crate, 1.0);
+  addCrate(-168, -80, 1.2, COL.crate2, 1.0);
+
+  addLow(-10, 148, 4.2, 0.42, 0.85);
+  addLow(8, 136, 0.42, 5.0, 0.88);
+  addLow(0, 96, 6.0, 0.42, 0.8);
+  addLow(-24, 70, 0.45, 5.5, 0.9);
+  addLow(14, 58, 5.2, 0.42, 0.82);
+  addLow(-6, 16, 0.42, 6.4, 0.88);
+  addLow(20, -12, 4.8, 0.42, 0.8);
+  addLow(-18, -36, 5.5, 0.42, 0.85);
+  addLow(8, -88, 0.42, 5.2, 0.9);
+  addLow(-22, -140, 4.4, 0.42, 0.85);
+  addLow(16, -164, 0.42, 4.8, 0.88);
+
+  addHurdle(0, 108, false);
+  addHurdle(6, 48, false);
+  addHurdle(-5, -6, false);
+  addHurdle(10, -120, true);
+
+  addDeco(0, 0.03, START.z - 3, 0.8, 0.02, 3.2, COL.mark);
+  addDeco(-0.7, 0.03, START.z - 4.4, 0.6, 0.02, 0.6, COL.mark);
+  addDeco(0.7, 0.03, START.z - 4.4, 0.6, 0.02, 0.6, COL.mark);
+  addDeco(0, 0.03, EXTRACT.z + 1, 6.5, 0.02, 0.7, COL.mark);
+  addDeco(0, 0.03, EXTRACT.z - 1.2, 4.5, 0.02, 0.55, COL.mark);
+  addSolid(-8.5, 0, -200.4, 1.4, 3.8, 1.4, COL.peri, false, false);
+  addSolid(8.5, 0, -200.4, 1.4, 3.8, 1.4, COL.peri, false, false);
+  addDeco(0, 3.5, -200.4, 16, 0.35, 0.7, COL.mark);
+
+  flushLevel();
 }
 
 function colMul(hex, s) {
@@ -955,19 +1131,36 @@ function makeDummy(x, z, facing) {
   return d;
 }
 
-makeDummy(-6.2, -3.5, 0.4);
-makeDummy(3.8, -4.2, -0.3);
-makeDummy(9.2, 1.4, -1.2);
-makeDummy(-10.5, 8.2, 2.4);
-makeDummy(14.0, -8.0, 1.0);
-makeDummy(-2.0, -14.0, 0.1);
-makeDummy(7.5, 12.0, 3.2);
+function placeDummy(x, z, facing, wps) {
+  const d = makeDummy(x, z, facing);
+  if (wps) d.waypoints = wps;
+  return d;
+}
 
-spawnAmmoPickup(0.2, 5.4, { carbine: 40, sweeper: 8, respawn: 18 });
-spawnAmmoPickup(8.0, -6.2, { carbine: 40, sweeper: 8, respawn: 20 });
-spawnAmmoPickup(-9.2, 0.6, { carbine: 40, sweeper: 8, respawn: 18 });
-spawnAmmoPickup(14.2, 2.2, { carbine: 40, sweeper: 8, respawn: 22 });
-spawnAmmoPickup(-3.6, -10.2, { carbine: 40, sweeper: 8, respawn: 19 });
+placeDummy(-10, 158, 0.2, [{ x: -8, z: 156 }, { x: -14, z: 162 }]);
+placeDummy(12, 150, -0.3, [{ x: 14, z: 148 }, { x: 8, z: 154 }]);
+placeDummy(-18, 128, 1.2, [{ x: -16, z: 124 }, { x: -22, z: 132 }]);
+placeDummy(18, 124, -1.4, [{ x: 20, z: 120 }, { x: 14, z: 128 }]);
+placeDummy(-8, 110, 0.1, [{ x: -6, z: 106 }, { x: -12, z: 114 }]);
+placeDummy(0, 40, 0.2, [{ x: 3, z: 38 }, { x: -4, z: 44 }]);
+placeDummy(16, 18, -0.4, [{ x: 18, z: 16 }, { x: 12, z: 22 }]);
+placeDummy(-22, 8, 2.2, [{ x: -20, z: 6 }, { x: -26, z: 12 }]);
+placeDummy(-36, -58, 1.0, [{ x: -34, z: -54 }, { x: -40, z: -62 }]);
+placeDummy(-70, -88, 0.4, [{ x: -66, z: -84 }, { x: -76, z: -94 }]);
+placeDummy(-100, -104, -0.2, [{ x: -96, z: -100 }, { x: -106, z: -110 }]);
+placeDummy(40, -70, -1.8, [{ x: 42, z: -66 }, { x: 36, z: -74 }]);
+placeDummy(28, -100, 2.8, [{ x: 30, z: -96 }, { x: 24, z: -104 }]);
+placeDummy(50, -40, 0.6, [{ x: 52, z: -36 }, { x: 46, z: -44 }]);
+placeDummy(-12, -168, 0.1, [{ x: -10, z: -164 }, { x: -16, z: -172 }]);
+placeDummy(14, -172, -0.2, [{ x: 16, z: -168 }, { x: 10, z: -176 }]);
+
+spawnAmmoPickup(4, 168, { carbine: 40, sweeper: 8, respawn: 18 });
+spawnAmmoPickup(-18, 140, { carbine: 40, sweeper: 8, respawn: 20 });
+spawnAmmoPickup(10, 50, { carbine: 40, sweeper: 8, respawn: 18 });
+spawnAmmoPickup(-48, 40, { carbine: 40, sweeper: 8, respawn: 22 });
+spawnAmmoPickup(-40, -70, { carbine: 40, sweeper: 8, respawn: 19 });
+spawnAmmoPickup(48, -90, { carbine: 40, sweeper: 8, respawn: 20 });
+spawnAmmoPickup(8, -160, { carbine: 40, sweeper: 8, respawn: 22 });
 
 
 for (let i = 0; i < 18; i++) {
@@ -989,7 +1182,7 @@ for (let i = 0; i < 14; i++) {
   sparks.push({ mesh: m, life: 0 });
 }
 
-buildYard();
+buildCompound();
 
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 function damp(cur, target, lambda, dt) {
@@ -1159,10 +1352,10 @@ function resetBot(d) {
 }
 
 function resetMission() {
-  player.pos.set(0, 0, 14);
+  player.pos.set(START.x, 0, START.z);
   player.vel.set(0, 0, 0);
-  player.yaw = Math.PI;
-  player.bodyYaw = Math.PI;
+  player.yaw = START.yaw;
+  player.bodyYaw = START.yaw;
   player.pitch = 0.1;
   player.stance = "stand";
   player.vault = null;
@@ -1220,7 +1413,8 @@ function checkVictory() {
   if (missionOver || !playing || paused) return;
   if (player.hp <= 0) return;
   if (!dummies.length) return;
-  if (dummies.every((d) => d.state === "down")) completeMission();
+  const dx = player.pos.x - EXTRACT.x, dz = player.pos.z - EXTRACT.z;
+  if (dx * dx + dz * dz <= EXTRACT.r * EXTRACT.r) completeMission();
 }
 
 function failMission() {
@@ -2086,7 +2280,7 @@ function botSeePlayer(d) {
   const dx = player.pos.x - d.root.position.x;
   const dz = player.pos.z - d.root.position.z;
   const dist = Math.hypot(dx, dz);
-  if (dist > 18) return false;
+  if (dist > 26) return false;
   if (losBlocked(d.root.position.x, d.root.position.z, player.pos.x, player.pos.z)) return false;
   return dist;
 }
@@ -2103,7 +2297,7 @@ function moveBot(d, tx, tz, speed, dt) {
 }
 
 function coverPointFor(d) {
-  let best = null, bestD = 9;
+  let best = null, bestD = 12;
   for (const o of obstacles) {
     if (!lowCover(o)) continue;
     const mx = (o.minX + o.maxX) * 0.5, mz = (o.minZ + o.maxZ) * 0.5;
@@ -2126,7 +2320,7 @@ function enemyFire(d) {
   const yaw = d.root.rotation.y + spread;
   const origin = new THREE.Vector3(d.root.position.x, d.crouch ? 0.72 : 1.15, d.root.position.z);
   const dir = new THREE.Vector3(Math.sin(yaw), -0.02, Math.cos(yaw)).normalize();
-  const world = worldHit(origin, dir, 22);
+  const world = worldHit(origin, dir, 28);
   const pHit = playerHitTest(origin, dir, world.dist);
   let end;
   if (pHit != null) {
@@ -2159,7 +2353,7 @@ function updateDummies(dt) {
     d.shootCd = Math.max(0, d.shootCd - dt);
     const distSee = botSeePlayer(d);
     const dist = Math.hypot(player.pos.x - d.root.position.x, player.pos.z - d.root.position.z);
-    if (distSee || (hear && dist < 22)) {
+    if (distSee || (hear && dist < 32)) {
       d.alert = 3.5;
       d.lastSeen = { x: player.pos.x, z: player.pos.z };
     } else {
@@ -2298,6 +2492,9 @@ function updateSoldier(dt) {
 }
 
 function updateCamera(dt) {
+  sun.position.set(player.pos.x + 16, 30, player.pos.z + 10);
+  sun.target.position.set(player.pos.x, 0, player.pos.z);
+  sun.target.updateMatrixWorld();
   if (isTop()) {
     const ahead = 2.15;
     const lx = player.pos.x + Math.sin(player.yaw) * ahead;
