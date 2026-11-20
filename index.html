@@ -1669,27 +1669,52 @@ function findAssistTarget() {
   return best;
 }
 
+function screenAxesToWish(sx, sy, invert, top, yaw) {
+  if (invert) { sx = -sx; sy = -sy; }
+  const len = Math.hypot(sx, sy);
+  if (len > 1) { sx /= len; sy /= len; }
+  const mag = Math.min(1, len);
+  if (top) return { x: sx, z: -sy, lx: sx, lz: sy, mag };
+  const c = Math.cos(yaw), s = Math.sin(yaw);
+  return { x: sx * c + sy * s, z: -sx * s + sy * c, lx: sx, lz: sy, mag };
+}
+
+function slideSideFromDir(vx, vz, yaw) {
+  const n = Math.hypot(vx, vz);
+  if (n < 0.08) return 0;
+  const fx = Math.sin(yaw), fz = Math.cos(yaw);
+  const rx = Math.cos(yaw), rz = -Math.sin(yaw);
+  const fwd = (vx * fx + vz * fz) / n;
+  const side = (vx * rx + vz * rz) / n;
+  const denom = Math.abs(side) + Math.max(fwd, 0.05);
+  return Math.max(-1, Math.min(1, side / denom));
+}
+
 function wishDir() {
   let sx = 0, sy = 0;
   if (touchMode) {
     sx = moveStick.x;
     sy = -moveStick.y;
-    if (settings.invertMove) { sx = -sx; sy = -sy; }
-  } else {
-    if (keys.KeyW || keys.ArrowUp) sy += 1;
-    if (keys.KeyS || keys.ArrowDown) sy -= 1;
-    if (keys.KeyA || keys.ArrowLeft) sx -= 1;
-    if (keys.KeyD || keys.ArrowRight) sx += 1;
-    if (settings.invertMove && isTop()) { sx = -sx; sy = -sy; }
+    return screenAxesToWish(sx, sy, settings.invertMove, isTop(), player.yaw);
   }
-  const len = Math.hypot(sx, sy);
-  if (len > 1) { sx /= len; sy /= len; }
-  const mag = Math.min(1, len);
-  if (isTop()) {
-    return { x: sx, z: -sy, lx: sx, lz: sy, mag };
+  if (keys.KeyW || keys.ArrowUp) sy += 1;
+  if (keys.KeyS || keys.ArrowDown) sy -= 1;
+  if (keys.KeyA || keys.ArrowLeft) sx -= 1;
+  if (keys.KeyD || keys.ArrowRight) sx += 1;
+  return screenAxesToWish(sx, sy, settings.invertMove && isTop(), isTop(), player.yaw);
+}
+
+function slideMoveDir() {
+  const wish = wishDir();
+  if (wish.mag > 0.15) {
+    const n = Math.hypot(wish.x, wish.z) || 1;
+    return { x: wish.x / n, z: wish.z / n, side: slideSideFromDir(wish.x, wish.z, player.yaw) };
   }
-  const c = Math.cos(player.yaw), s = Math.sin(player.yaw);
-  return { x: sx * c + sy * s, z: -sx * s + sy * c, lx: sx, lz: sy, mag };
+  const spd = Math.hypot(player.vel.x, player.vel.z);
+  if (spd > 0.4) {
+    return { x: player.vel.x / spd, z: player.vel.z / spd, side: slideSideFromDir(player.vel.x, player.vel.z, player.yaw) };
+  }
+  return { x: Math.sin(player.yaw), z: Math.cos(player.yaw), side: 0 };
 }
 
 function sprinting(wish) {
@@ -1824,35 +1849,15 @@ function tryVault(hit) {
 }
 
 function slideSideAmount() {
-  const wish = wishDir();
-  let vx = player.vel.x, vz = player.vel.z;
-  if (wish.mag > 0.15) { vx = wish.x; vz = wish.z; }
-  const n = Math.hypot(vx, vz);
-  if (n < 0.08) return 0;
-  const fx = Math.sin(player.yaw), fz = Math.cos(player.yaw);
-  const rx = Math.cos(player.yaw), rz = -Math.sin(player.yaw);
-  const fwd = (vx * fx + vz * fz) / n;
-  const side = (vx * rx + vz * rz) / n;
-  const denom = Math.abs(side) + Math.max(fwd, 0.05);
-  return clamp(side / denom, -1, 1);
+  return slideMoveDir().side;
 }
 
 function trySlide() {
   if (!gameActive() || player.stance !== "stand" || player.vault) return;
-  const spd = Math.hypot(player.vel.x, player.vel.z);
-  const dirx = Math.sin(player.yaw);
-  const dirz = Math.cos(player.yaw);
-  if (spd < 1.2) {
-    player.vel.x += dirx * 6;
-    player.vel.z += dirz * 6;
-    player.slideSide = damp(player.slideSide, 0, 20, 1);
-  } else {
-    const nx = player.vel.x, nz = player.vel.z;
-    const n = Math.hypot(nx, nz) || 1;
-    player.vel.x = (nx / n) * Math.max(n, SLIDE_BOOST);
-    player.vel.z = (nz / n) * Math.max(n, SLIDE_BOOST);
-    player.slideSide = slideSideAmount();
-  }
+  const dir = slideMoveDir();
+  player.vel.x = dir.x * SLIDE_BOOST;
+  player.vel.z = dir.z * SLIDE_BOOST;
+  player.slideSide = dir.side;
   player.stance = "slide";
   player.slideT = 0.58;
 }
