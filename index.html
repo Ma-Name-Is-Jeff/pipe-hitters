@@ -343,10 +343,12 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPrefere
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFShadowMap;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.08;
 
-scene.add(new THREE.HemisphereLight(0xc9d4dc, 0x3a3a32, 1.0));
-const sun = new THREE.DirectionalLight(0xfff2da, 0.9);
+scene.add(new THREE.HemisphereLight(0xd6e2ec, 0x3e3a30, 0.72));
+const sun = new THREE.DirectionalLight(0xfff1d6, 2.15);
 sun.position.set(START.x + 16, 30, START.z + 10);
 sun.castShadow = true;
 sun.shadow.mapSize.set(1024, 1024);
@@ -607,59 +609,94 @@ function addMesh(parent, geometry, material, x, y, z, rx, ry, rz, sx, sy, sz) {
   return m;
 }
 
-function makeMat(color) {
-  return new THREE.MeshLambertMaterial({ color });
+function makeMat(color, rough, metal, shade) {
+  const c = new THREE.Color(color);
+  if (shade) c.offsetHSL(0, 0, shade);
+  return new THREE.MeshStandardMaterial({
+    color: c,
+    roughness: rough == null ? 0.74 : rough,
+    metalness: metal == null ? 0.06 : metal,
+  });
+}
+
+function capGeo(name, r, len, segs) {
+  return geo(name, () => new THREE.CapsuleGeometry(r, len, 2, segs || 8));
 }
 
 function buildGun(gunCol) {
   const gun = new THREE.Group();
-  const main = makeMat(gunCol);
-  const dark = makeMat(0x2a2a2c);
-  const metal = makeMat(0x3a3c40);
+  const main = makeMat(gunCol, 0.42, 0.45, 0);
+  const dark = makeMat(0x2a2a2c, 0.48, 0.4, 0);
+  const metal = makeMat(0x3a3c40, 0.35, 0.55, 0.02);
   addMesh(gun, geo("gRecv", () => new THREE.BoxGeometry(0.05, 0.085, 0.22)), main, 0, 0.02, 0.06);
   addMesh(gun, geo("gStock", () => new THREE.BoxGeometry(0.04, 0.07, 0.16)), dark, 0, 0.0, -0.12);
   addMesh(gun, geo("gGrip", () => new THREE.BoxGeometry(0.035, 0.12, 0.05)), dark, 0, -0.08, -0.02, 0.35);
   addMesh(gun, geo("gMag", () => new THREE.BoxGeometry(0.04, 0.14, 0.06)), metal, 0, -0.1, 0.08);
   addMesh(gun, geo("gGuard", () => new THREE.BoxGeometry(0.045, 0.05, 0.18)), dark, 0, 0.015, 0.24);
-  addMesh(gun, geo("gBar", () => new THREE.CylinderGeometry(0.012, 0.012, 0.22, 6)), metal, 0, 0.02, 0.42, Math.PI / 2);
-  addMesh(gun, geo("gMuz", () => new THREE.CylinderGeometry(0.016, 0.016, 0.04, 6)), dark, 0, 0.02, 0.54, Math.PI / 2);
+  addMesh(gun, geo("gBar", () => new THREE.CylinderGeometry(0.012, 0.012, 0.22, 8)), metal, 0, 0.02, 0.42, Math.PI / 2);
+  addMesh(gun, geo("gMuz", () => new THREE.CylinderGeometry(0.016, 0.016, 0.04, 8)), dark, 0, 0.02, 0.54, Math.PI / 2);
   addMesh(gun, geo("gSight", () => new THREE.BoxGeometry(0.012, 0.05, 0.02)), metal, 0, 0.06, 0.14);
   addMesh(gun, geo("gFront", () => new THREE.BoxGeometry(0.01, 0.045, 0.016)), metal, 0, 0.055, 0.4);
+  const grip = new THREE.Group();
+  grip.position.set(0.0, -0.05, -0.02);
+  grip.rotation.set(1.15, 0, 0);
+  gun.add(grip);
+  const support = new THREE.Group();
+  support.position.set(-0.01, 0.0, 0.26);
+  support.rotation.set(1.05, 0.15, 0.7);
+  gun.add(support);
+  const magHold = new THREE.Group();
+  magHold.position.set(0.0, -0.14, 0.08);
+  magHold.rotation.set(0.4, 0, 0.2);
+  gun.add(magHold);
+  gun.userData.grip = grip;
+  gun.userData.support = support;
+  gun.userData.magHold = magHold;
   return gun;
 }
 
+const HIP_Y = 0.94;
+const LEN_THIGH = 0.44;
+const LEN_SHIN = 0.4;
+const LEN_UPPER = 0.28;
+const LEN_FORE = 0.26;
+
 function makeSoldier(body, pants, skin, gunCol) {
-  const vest = makeMat(body);
-  const shirt = makeMat(colMul(body, 0.72));
-  const pouch = makeMat(colMul(body, 0.6));
-  const strap = makeMat(0x2a2620);
-  const helm = makeMat(colMul(body, 0.78));
-  const visor = makeMat(0x121614);
-  const faceM = makeMat(skin);
-  const pantM = makeMat(pants);
-  const bootM = makeMat(colMul(pants, 0.45));
-  const gloveM = makeMat(colMul(body, 0.55));
+  const vest = makeMat(body, 0.78, 0.05, -0.02);
+  const shirt = makeMat(colMul(body, 0.78), 0.86, 0.03, 0.02);
+  const pouch = makeMat(colMul(body, 0.62), 0.8, 0.04, -0.03);
+  const strap = makeMat(0x2a2620, 0.82, 0.04, 0);
+  const helm = makeMat(colMul(body, 0.7), 0.42, 0.12, -0.04);
+  const visor = makeMat(0x121614, 0.22, 0.35, 0);
+  const faceM = makeMat(skin, 0.62, 0.02, 0.015);
+  const pantM = makeMat(pants, 0.84, 0.03, 0.02);
+  const bootM = makeMat(colMul(pants, 0.42), 0.68, 0.08, -0.02);
+  const gloveM = makeMat(colMul(body, 0.5), 0.7, 0.05, 0);
 
   const root = new THREE.Group();
   const hips = new THREE.Group();
-  hips.position.y = 0.9;
+  hips.position.y = HIP_Y;
   root.add(hips);
 
   const pelvis = new THREE.Group();
-  addMesh(pelvis, geo("pelvis", () => new THREE.BoxGeometry(0.32, 0.16, 0.2)), pantM, 0, 0.02, 0);
-  addMesh(pelvis, geo("belt", () => new THREE.BoxGeometry(0.34, 0.05, 0.22)), strap, 0, 0.08, 0);
+  addMesh(pelvis, capGeo("pelvisC", 0.11, 0.08, 8), pantM, 0, 0.02, 0, 0, 0, Math.PI / 2, 1.35, 0.85, 1.05);
+  addMesh(pelvis, geo("belt", () => new THREE.BoxGeometry(0.32, 0.045, 0.2)), strap, 0, 0.08, 0);
   hips.add(pelvis);
 
   function makeLeg(sign) {
     const thigh = new THREE.Group();
-    thigh.position.set(0.1 * sign, 0, 0.01);
-    const thighMesh = addMesh(thigh, geo("thigh", () => new THREE.CylinderGeometry(0.065, 0.075, 0.4, 6)), pantM, 0, -0.2, 0);
+    thigh.position.set(0.11 * sign, 0, 0.01);
+    const thighMesh = addMesh(thigh, capGeo("thighC", 0.07, LEN_THIGH - 0.08, 8), pantM, 0, -LEN_THIGH * 0.5, 0);
     const shin = new THREE.Group();
-    shin.position.y = -0.4;
-    const shinMesh = addMesh(shin, geo("shin", () => new THREE.CylinderGeometry(0.052, 0.06, 0.38, 6)), pantM, 0, -0.19, 0);
-    const boot = addMesh(shin, geo("boot", () => new THREE.BoxGeometry(0.11, 0.1, 0.2)), bootM, 0, -0.42, 0.04);
+    shin.position.y = -LEN_THIGH;
+    const shinMesh = addMesh(shin, capGeo("shinC", 0.055, LEN_SHIN - 0.08, 8), pantM, 0, -LEN_SHIN * 0.5, 0);
+    const foot = new THREE.Group();
+    foot.position.y = -LEN_SHIN;
+    const boot = addMesh(foot, geo("bootC", () => new THREE.BoxGeometry(0.095, 0.09, 0.2)), bootM, 0, -0.02, 0.05);
+    addMesh(foot, geo("bootToe", () => new THREE.BoxGeometry(0.09, 0.055, 0.07)), bootM, 0, -0.01, 0.14);
+    shin.add(foot);
     thigh.add(shin);
-    return { thigh, shin, boot, thighMesh, shinMesh };
+    return { thigh, shin, foot, boot, thighMesh, shinMesh };
   }
   const leftLeg = makeLeg(-1);
   const rightLeg = makeLeg(1);
@@ -670,67 +707,80 @@ function makeSoldier(body, pants, skin, gunCol) {
   hips.add(spine);
 
   const top = new THREE.Group();
-  addMesh(top, geo("shirt", () => new THREE.BoxGeometry(0.32, 0.38, 0.2)), shirt, 0, 0.22, 0);
-  addMesh(top, geo("vest", () => new THREE.BoxGeometry(0.36, 0.34, 0.24)), vest, 0, 0.2, 0.01);
-  addMesh(top, geo("pouch", () => new THREE.BoxGeometry(0.08, 0.1, 0.06)), pouch, -0.1, 0.18, 0.14);
-  addMesh(top, geo("pouch2", () => new THREE.BoxGeometry(0.08, 0.1, 0.06)), pouch, 0, 0.18, 0.14);
-  addMesh(top, geo("pouch3", () => new THREE.BoxGeometry(0.08, 0.1, 0.06)), pouch, 0.1, 0.18, 0.14);
-  addMesh(top, geo("sideP", () => new THREE.BoxGeometry(0.07, 0.12, 0.08)), pouch, 0.2, 0.08, 0.02);
-  addMesh(top, geo("strapL", () => new THREE.BoxGeometry(0.05, 0.32, 0.02)), strap, -0.12, 0.22, 0.12);
-  addMesh(top, geo("strapR", () => new THREE.BoxGeometry(0.05, 0.32, 0.02)), strap, 0.12, 0.22, 0.12);
+  addMesh(top, capGeo("ribC", 0.14, 0.2, 8), shirt, 0, 0.22, 0, 0, 0, 0, 1.15, 1, 0.9);
+  addMesh(top, geo("vestC", () => new THREE.BoxGeometry(0.34, 0.32, 0.22)), vest, 0, 0.2, 0.015);
+  addMesh(top, geo("pouch", () => new THREE.BoxGeometry(0.07, 0.09, 0.055)), pouch, -0.09, 0.18, 0.13);
+  addMesh(top, geo("pouch2", () => new THREE.BoxGeometry(0.07, 0.09, 0.055)), pouch, 0, 0.18, 0.13);
+  addMesh(top, geo("pouch3", () => new THREE.BoxGeometry(0.07, 0.09, 0.055)), pouch, 0.09, 0.18, 0.13);
+  addMesh(top, geo("sideP", () => new THREE.BoxGeometry(0.065, 0.11, 0.07)), pouch, 0.19, 0.09, 0.02);
+  addMesh(top, geo("strapL", () => new THREE.BoxGeometry(0.04, 0.28, 0.02)), strap, -0.11, 0.22, 0.11);
+  addMesh(top, geo("strapR", () => new THREE.BoxGeometry(0.04, 0.28, 0.02)), strap, 0.11, 0.22, 0.11);
   spine.add(top);
 
+  const neck = new THREE.Group();
+  neck.position.set(0, 0.44, 0.01);
+  spine.add(neck);
   const head = new THREE.Group();
-  head.position.set(0, 0.46, 0.01);
-  spine.add(head);
+  head.position.set(0, 0.08, 0);
+  neck.add(head);
 
   const face = new THREE.Group();
-  addMesh(face, geo("neck", () => new THREE.CylinderGeometry(0.05, 0.06, 0.1, 6)), faceM, 0, -0.1, 0);
-  addMesh(face, geo("skull", () => new THREE.SphereGeometry(0.125, 7, 5)), faceM, 0, 0.04, 0.01, 0, 0, 0, 0.95, 1.05, 1);
-  addMesh(face, geo("nose", () => new THREE.BoxGeometry(0.03, 0.03, 0.04)), faceM, 0, 0.03, 0.12);
+  addMesh(face, capGeo("neckC", 0.045, 0.05, 8), faceM, 0, -0.08, 0);
+  addMesh(face, geo("skull", () => new THREE.SphereGeometry(0.115, 10, 8)), faceM, 0, 0.05, 0.01, 0, 0, 0, 0.95, 1.12, 1);
+  addMesh(face, geo("nose", () => new THREE.BoxGeometry(0.025, 0.03, 0.035)), faceM, 0, 0.04, 0.11);
   head.add(face);
 
   const helmet = new THREE.Group();
-  addMesh(helmet, geo("helm", () => new THREE.SphereGeometry(0.145, 7, 5)), helm, 0, 0.08, 0, 0, 0, 0, 1.02, 0.72, 1.08);
-  addMesh(helmet, geo("brim", () => new THREE.BoxGeometry(0.22, 0.03, 0.08)), helm, 0, 0.02, -0.1);
-  addMesh(helmet, geo("visor", () => new THREE.BoxGeometry(0.2, 0.05, 0.08)), visor, 0, 0.05, 0.1);
-  addMesh(helmet, geo("earL", () => new THREE.BoxGeometry(0.05, 0.07, 0.08)), helm, -0.13, 0.02, 0.01);
-  addMesh(helmet, geo("earR", () => new THREE.BoxGeometry(0.05, 0.07, 0.08)), helm, 0.13, 0.02, 0.01);
+  addMesh(helmet, geo("helm", () => new THREE.SphereGeometry(0.132, 10, 8)), helm, 0, 0.08, 0, 0, 0, 0, 1.05, 0.72, 1.1);
+  addMesh(helmet, geo("helmRim", () => new THREE.CylinderGeometry(0.13, 0.125, 0.04, 10)), helm, 0, 0.02, 0.01);
+  addMesh(helmet, geo("visor", () => new THREE.BoxGeometry(0.18, 0.045, 0.07)), visor, 0, 0.05, 0.09);
+  addMesh(helmet, geo("earL", () => new THREE.BoxGeometry(0.04, 0.06, 0.07)), helm, -0.12, 0.03, 0.01);
+  addMesh(helmet, geo("earR", () => new THREE.BoxGeometry(0.04, 0.06, 0.07)), helm, 0.12, 0.03, 0.01);
   head.add(helmet);
 
   function makeArm(sign) {
+    const clav = new THREE.Group();
+    clav.position.set(0.05 * sign, 0.38, 0);
     const upper = new THREE.Group();
-    upper.position.set(0.21 * sign, 0.34, 0);
-    const upperMesh = addMesh(upper, geo("uarm", () => new THREE.CylinderGeometry(0.05, 0.055, 0.28, 6)), vest, 0, -0.14, 0);
+    upper.position.set(0.15 * sign, 0, 0);
+    addMesh(upper, geo("delt", () => new THREE.SphereGeometry(0.065, 8, 6)), vest, 0, 0, 0, 0, 0, 0, 1.15, 0.9, 1);
+    const upperMesh = addMesh(upper, capGeo("uarmC", 0.045, LEN_UPPER - 0.07, 8), vest, 0, -LEN_UPPER * 0.5, 0);
     const fore = new THREE.Group();
-    fore.position.y = -0.28;
-    const foreMesh = addMesh(fore, geo("farm", () => new THREE.CylinderGeometry(0.042, 0.048, 0.26, 6)), shirt, 0, -0.13, 0);
+    fore.position.y = -LEN_UPPER;
+    const foreMesh = addMesh(fore, capGeo("farmC", 0.038, LEN_FORE - 0.07, 8), shirt, 0, -LEN_FORE * 0.5, 0);
     const hand = new THREE.Group();
-    hand.position.y = -0.26;
-    addMesh(hand, geo("hand", () => new THREE.BoxGeometry(0.06, 0.06, 0.08)), gloveM, 0, 0, 0.02);
+    hand.position.y = -LEN_FORE;
+    addMesh(hand, geo("palm", () => new THREE.BoxGeometry(0.055, 0.09, 0.035)), gloveM, 0, -0.04, 0.01);
+    addMesh(hand, geo("thumb", () => new THREE.BoxGeometry(0.02, 0.045, 0.02)), gloveM, 0.03 * sign, -0.03, 0.02, 0.4);
     fore.add(hand);
     upper.add(fore);
-    return { upper, fore, hand, upperMesh, foreMesh };
+    clav.add(upper);
+    return { clav, upper, fore, hand, upperMesh, foreMesh };
   }
   const leftArm = makeArm(-1);
   const rightArm = makeArm(1);
-  spine.add(leftArm.upper, rightArm.upper);
+  spine.add(leftArm.clav, rightArm.clav);
 
+  const weapon = new THREE.Group();
+  weapon.position.set(0.12, 0.3, 0.18);
+  spine.add(weapon);
   const gun = buildGun(gunCol);
-  gun.position.set(0.02, -0.02, 0.12);
-  rightArm.hand.add(gun);
+  weapon.add(gun);
 
   root.userData = {
-    gun,
+    gun, weapon,
     rArm: rightArm.upper, lArm: leftArm.upper,
     lLeg: leftLeg.thigh, rLeg: rightLeg.thigh,
-    torso: spine, head,
+    torso: spine, head, neck,
     hips, spine,
     lThigh: leftLeg.thigh, rThigh: rightLeg.thigh,
     lShin: leftLeg.shin, rShin: rightLeg.shin,
+    lFoot: leftLeg.foot, rFoot: rightLeg.foot,
+    lClav: leftArm.clav, rClav: rightArm.clav,
     lUpper: leftArm.upper, rUpper: rightArm.upper,
     lFore: leftArm.fore, rFore: rightArm.fore,
     lHand: leftArm.hand, rHand: rightArm.hand,
+    len: { thigh: LEN_THIGH, shin: LEN_SHIN, upper: LEN_UPPER, fore: LEN_FORE },
     parts: {
       helmet, face, top,
       bottom: {
@@ -748,6 +798,62 @@ function makeSoldier(body, pants, skin, gunCol) {
   return root;
 }
 
+const _ik = {
+  parentInv: new THREE.Matrix4(),
+  target: new THREE.Vector3(),
+  origin: new THREE.Vector3(),
+  toTarget: new THREE.Vector3(),
+  pole: new THREE.Vector3(),
+  axisX: new THREE.Vector3(),
+  axisY: new THREE.Vector3(),
+  axisZ: new THREE.Vector3(),
+  upperDir: new THREE.Vector3(),
+  lowerDir: new THREE.Vector3(),
+  rest: new THREE.Vector3(0, -1, 0),
+  q: new THREE.Quaternion(),
+  m: new THREE.Matrix4(),
+  elbow: new THREE.Vector3(),
+  handQ: new THREE.Quaternion(),
+  up: new THREE.Vector3(0, 1, 0),
+  fwd: new THREE.Vector3(0, 0, 1),
+};
+
+function ikTwoBone(upper, lower, hand, targetPos, polePos, lenU, lenL, handQuat) {
+  const parent = upper.parent;
+  parent.updateWorldMatrix(true, false);
+  _ik.parentInv.copy(parent.matrixWorld).invert();
+  _ik.target.copy(targetPos).applyMatrix4(_ik.parentInv);
+  _ik.origin.copy(upper.position);
+  _ik.toTarget.copy(_ik.target).sub(_ik.origin);
+  let dist = _ik.toTarget.length();
+  if (dist < 1e-5) return;
+  const maxR = lenU + lenL - 0.012, minR = Math.abs(lenU - lenL) + 0.02;
+  if (dist > maxR) { _ik.toTarget.multiplyScalar(maxR / dist); dist = maxR; }
+  else if (dist < minR) { _ik.toTarget.multiplyScalar(minR / dist); dist = minR; }
+  _ik.axisZ.copy(_ik.toTarget).normalize();
+  _ik.pole.copy(polePos).applyMatrix4(_ik.parentInv).sub(_ik.origin);
+  _ik.axisX.copy(_ik.pole).addScaledVector(_ik.axisZ, -_ik.pole.dot(_ik.axisZ));
+  if (_ik.axisX.lengthSq() < 1e-8) {
+    _ik.axisX.crossVectors(_ik.axisZ, _ik.fwd);
+    if (_ik.axisX.lengthSq() < 1e-8) _ik.axisX.set(1, 0, 0);
+  }
+  _ik.axisX.normalize();
+  const a = lenU, b = lenL, c = dist;
+  const ang = Math.acos(clamp((a * a + c * c - b * b) / (2 * a * c), -1, 1));
+  _ik.upperDir.copy(_ik.axisZ).multiplyScalar(Math.cos(ang)).addScaledVector(_ik.axisX, Math.sin(ang));
+  upper.quaternion.setFromUnitVectors(_ik.rest, _ik.upperDir);
+  upper.updateMatrix();
+  _ik.m.copy(upper.matrix).invert();
+  _ik.elbow.copy(_ik.origin).addScaledVector(_ik.upperDir, lenU);
+  _ik.lowerDir.copy(_ik.target).sub(_ik.elbow).normalize().transformDirection(_ik.m);
+  if (_ik.lowerDir.lengthSq() > 1e-8) lower.quaternion.setFromUnitVectors(_ik.rest, _ik.lowerDir.normalize());
+  if (hand && handQuat) {
+    lower.updateWorldMatrix(true, false);
+    _ik.handQ.setFromRotationMatrix(_ik.m.copy(lower.matrixWorld).invert());
+    hand.quaternion.copy(_ik.handQ).multiply(handQuat);
+  }
+}
+
 function dampRot(obj, x, y, z, lam, dt) {
   obj.rotation.x = damp(obj.rotation.x, x, lam, dt);
   obj.rotation.y = damp(obj.rotation.y, y, lam, dt);
@@ -757,12 +863,19 @@ function dampRot(obj, x, y, z, lam, dt) {
 function resetRig(root) {
   const u = root.userData;
   if (!u.hips) return;
-  u.hips.position.y = 0.9;
+  u.hips.position.y = HIP_Y;
   u.hips.rotation.set(0, 0, 0);
-  const keys = ["spine", "head", "lThigh", "rThigh", "lShin", "rShin", "lUpper", "rUpper", "lFore", "rFore", "gun"];
+  const keys = ["spine", "neck", "head", "lThigh", "rThigh", "lShin", "rShin", "lFoot", "rFoot", "lClav", "rClav", "lUpper", "rUpper", "lFore", "rFore", "lHand", "rHand", "weapon", "gun"];
   for (const k of keys) if (u[k]) u[k].rotation.set(0, 0, 0);
-  if (u.gun) u.gun.position.set(0.02, -0.02, 0.12);
+  if (u.weapon) u.weapon.position.set(0.12, 0.3, 0.18);
 }
+
+const _gripPos = new THREE.Vector3();
+const _supPos = new THREE.Vector3();
+const _rPole = new THREE.Vector3();
+const _lPole = new THREE.Vector3();
+const _rHandQ = new THREE.Quaternion();
+const _lHandQ = new THREE.Quaternion();
 
 function poseSoldier(root, opt) {
   const u = root.userData;
@@ -774,56 +887,54 @@ function poseSoldier(root, opt) {
   const side = opt.slideSide || 0;
   const sideAmt = Math.abs(side);
   const sign = side < 0 ? -1 : 1;
-  const run = Math.min(1, spd / 5);
+  const run = Math.min(1, spd / 5.6);
   const phase = (opt.bob || 0) * 2 * Math.PI * 0.22;
   const swing = Math.sin(phase) * run;
   const breath = Math.sin((opt.time || 0) * 2.2) * 0.03 * (1 - run);
-  const aim = opt.aiming ? 1 : 0;
   const hit = opt.hit > 0 ? Math.min(1, opt.hit / 0.12) : 0;
+  const aim = opt.aiming && k < 0.25 && !opt.down ? 1 : 0;
 
-  let hipY = 0.9;
-  let hx = 0, hy = 0, hz = 0;
-  let sx = breath, sy = 0, sz = hit * 0.12;
-  let headX = -breath * 0.4, headY = 0, headZ = 0;
-  let lTx = swing * 0.7, rTx = -swing * 0.7, lTz = 0, rTz = 0;
-  let lSx = Math.max(0, -swing) * 0.55, rSx = Math.max(0, swing) * 0.55;
-  let lUx = -swing * 0.45, rUx = swing * 0.4, lUy = 0, rUy = 0, lUz = 0, rUz = 0;
-  let lFx = Math.max(0, swing) * 0.35, rFx = Math.max(0, -swing) * 0.3;
-  let gunX = 0.05, gunY = 0, gunZ = 0;
+  let hipY = HIP_Y;
+  let hx = 0, hy = swing * 0.06, hz = 0;
+  let sx = breath + run * 0.08, sy = 0, sz = hit * 0.12;
+  let headX = -breath * 0.4 - run * 0.06, headY = 0, headZ = 0;
+  let lTx = swing * 0.85, rTx = -swing * 0.85, lTz = 0, rTz = 0;
+  let lSx = (0.2 + 0.95 * Math.max(0, -Math.sin(phase))) * run;
+  let rSx = (0.2 + 0.95 * Math.max(0, Math.sin(phase))) * run;
+  let lFx = -0.15 * Math.sin(phase) * run, rFx = 0.15 * Math.sin(phase) * run;
+  let lCx = 0, rCx = 0, lCy = 0, rCy = 0;
+  let wx = aim ? 0.04 : -0.18, wy = aim ? 0.04 : 0.08, wz = 0;
+  let wpx = aim ? 0.1 : 0.13, wpy = aim ? 0.33 : 0.28, wpz = aim ? 0.22 : 0.16;
 
   if (opt.crouch && k < 0.2 && !opt.vault && !opt.down) {
-    hipY = 0.62;
-    hx = 0.12;
-    sx += 0.2;
+    hipY = 0.64;
+    hx = 0.18;
+    sx += 0.16;
     lTx = -1.05; rTx = -1.05;
-    lSx = 1.3; rSx = 1.3;
-    lUx += 0.15; rUx += 0.1;
+    lSx = 1.35; rSx = 1.35;
+    lFx = 0.15; rFx = 0.15;
+    wpy -= 0.04;
+    wpz += 0.02;
   }
 
-  if (opt.aiming && k < 0.25 && !opt.down) {
-    sx += 0.06;
-    sy += 0.06;
-    rUx = -1.35; rUy = -0.12; rUz = 0;
-    rFx = -0.12;
-    lUx = -1.15; lUy = 0.42; lUz = 0.08;
-    lFx = -0.55;
-    gunX = 0.12; gunY = 0; gunZ = 0;
-    if (opt.pitch) { sx += opt.pitch * 0.15; gunX += opt.pitch * 0.2; }
+  if (aim) {
+    sx += 0.05;
+    sy += 0.05;
+    headX += 0.08;
+    headY += 0.06;
+    lCy = 0.18; rCy = -0.12;
+    lCx = -0.12; rCx = -0.08;
+    if (opt.pitch) { sx += opt.pitch * 0.15; wx += opt.pitch * 0.25; }
   } else if (!opt.down) {
-    rUx = swing * 0.4 - 0.35;
-    rUy = -0.08;
-    rFx = -0.25;
-    lUx = -swing * 0.35 - 0.2;
-    lFx = -0.15;
-    gunX = 0.35;
+    lCy = -swing * 0.06;
+    rCy = swing * 0.06;
   }
 
   if (k > 0.001 && !opt.down) {
-    const kneeHX = -0.22, kneeHY = 0, kneeHZ = 0, kneeY = 0.42;
-    const sideHX = 0.06, sideHY = 0, sideHZ = -1.12 * sign, sideY = 0.34;
+    const kneeHX = -0.22, kneeY = 0.44;
+    const sideHX = 0.06, sideHZ = -1.12 * sign, sideY = 0.36;
     hx = hx * (1 - k) + (kneeHX + (sideHX - kneeHX) * sideAmt) * k;
-    hy = hy * (1 - k) + (kneeHY + (sideHY - kneeHY) * sideAmt) * k;
-    hz = hz * (1 - k) + (kneeHZ + (sideHZ - kneeHZ) * sideAmt) * k;
+    hz = hz * (1 - k) + sideHZ * sideAmt * k;
     hipY = hipY * (1 - k) + (kneeY + (sideY - kneeY) * sideAmt) * k;
     sx = sx * (1 - k) + (-0.22 + 0.12 * sideAmt) * k;
     const kneeLT = -1.15, kneeRT = -1.2, kneeLS = 2.15, kneeRS = 2.2;
@@ -837,51 +948,93 @@ function poseSoldier(root, opt) {
     rSx = rSx * (1 - k) + (kneeRS + (hipRS - kneeRS) * sideAmt) * k;
     lTz = 0.22 * sign * sideAmt * k;
     rTz = 0.22 * sign * sideAmt * k;
-    lUx = lUx * (1 - k) + (0.25 + 0.2 * sideAmt) * k;
-    rUx = rUx * (1 - k) + (-0.8 + 0.2 * sideAmt) * k;
-    gunX = gunX * (1 - k) + 0.2 * k;
+    wpx = wpx * (1 - k) + 0.1 * k;
+    wpy = wpy * (1 - k) + 0.22 * k;
+    wpz = wpz * (1 - k) + 0.2 * k;
+    wx = wx * (1 - k) + 0.15 * k;
   }
 
   if (opt.vault && k < 0.2 && !opt.down) {
     const v = clamp(opt.vault.t / opt.vault.dur, 0, 1);
     const lift = Math.sin(v * Math.PI);
-    hx = -0.15 * lift;
-    sx = 0.28 * lift;
-    hipY = 0.9;
-    lTx = -1.25 * lift; rTx = 0.55 * lift;
-    lSx = 1.1 * lift; rSx = 0.2 * lift;
-    lUx = -0.5 * lift; rUx = -0.2 * lift;
-    lFx = -0.3 * lift;
+    hx = -0.12 * lift;
+    sx = 0.22 * lift;
+    hipY = HIP_Y;
+    lTx = -1.2 * lift; rTx = 0.55 * lift;
+    lSx = 1.15 * lift; rSx = 0.25 * lift;
+    lFx = 0.3 * lift; rFx = -0.1 * lift;
+    wpy = 0.34; wpz = 0.16; wx = -0.1;
   }
 
   if (opt.down) {
     const dnk = clamp((opt.downT || 0) / 0.4, 0, 1);
     const e = dnk * dnk * (3 - 2 * dnk);
-    hipY = 0.9 + (0.22 - 0.9) * e;
+    hipY = HIP_Y + (0.24 - HIP_Y) * e;
     hx = 1.25 * e;
     hz = 0.18 * e;
     sx = 0.1 * e;
     lTx = -0.35 * e; rTx = 0.45 * e;
     lSx = 0.5 * e; rSx = 0.25 * e;
-    lUx = 0.4 * e; rUx = 0.15 * e;
-    lFx = 0.3 * e; rFx = 0.5 * e;
-    lUy = 0.2 * e; rUy = -0.15 * e;
-    gunX = 0.4 * e;
+    wpy = 0.12; wpz = 0.2; wx = 0.6; wy = 0.2;
+  }
+
+  const rel = opt.reloadT || 0;
+  const relDur = opt.reloadDur || 1.45;
+  let relU = 0, relPull = 0;
+  if (rel > 0 && !opt.down) {
+    relU = 1 - clamp(rel / relDur, 0, 1);
+    if (relU < 0.2) relPull = relU / 0.2;
+    else if (relU < 0.45) relPull = 1;
+    else if (relU < 0.75) relPull = 1 - (relU - 0.45) / 0.3 * 0.35;
+    else relPull = Math.max(0, 1 - (relU - 0.75) / 0.25);
+    wy += 0.18 * Math.min(1, relPull);
+    wx += 0.25 * Math.min(1, relPull);
+    wpx += 0.02;
   }
 
   u.hips.position.y = damp(u.hips.position.y, hipY, lam, dt);
   dampRot(u.hips, hx, hy, hz, lam, dt);
   dampRot(u.spine, sx, sy, sz, lam, dt);
+  if (u.neck) dampRot(u.neck, headX * 0.35, 0, 0, lam, dt);
   dampRot(u.head, headX, headY, headZ, lam, dt);
   dampRot(u.lThigh, lTx, 0, lTz, lam, dt);
   dampRot(u.rThigh, rTx, 0, rTz, lam, dt);
   dampRot(u.lShin, lSx, 0, 0, lam, dt);
   dampRot(u.rShin, rSx, 0, 0, lam, dt);
-  dampRot(u.lUpper, lUx, lUy, lUz, lam, dt);
-  dampRot(u.rUpper, rUx, rUy, rUz, lam, dt);
-  dampRot(u.lFore, lFx, 0, 0, lam, dt);
-  dampRot(u.rFore, rFx, 0, 0, lam, dt);
-  dampRot(u.gun, gunX, gunY, gunZ, lam, dt);
+  if (u.lFoot) dampRot(u.lFoot, lFx, 0, 0, lam, dt);
+  if (u.rFoot) dampRot(u.rFoot, rFx, 0, 0, lam, dt);
+  if (u.lClav) dampRot(u.lClav, lCx, lCy, 0.08, lam, dt);
+  if (u.rClav) dampRot(u.rClav, rCx, rCy, -0.08, lam, dt);
+
+  if (u.weapon) {
+    u.weapon.position.x = damp(u.weapon.position.x, wpx, lam, dt);
+    u.weapon.position.y = damp(u.weapon.position.y, wpy, lam, dt);
+    u.weapon.position.z = damp(u.weapon.position.z, wpz, lam, dt);
+    dampRot(u.weapon, wx, wy, wz, lam, dt);
+  }
+
+  if (!u.gun || !u.gun.userData.grip) return;
+  root.updateWorldMatrix(true, true);
+  const grip = u.gun.userData.grip;
+  const support = relPull > 0.05 ? u.gun.userData.magHold : u.gun.userData.support;
+  if (relPull > 0.05 && relPull < 0.85 && u.gun.userData.support) {
+    const mix = relPull < 0.2 ? relPull / 0.2 : (relPull > 0.7 ? (0.85 - relPull) / 0.15 : 1);
+    u.gun.userData.support.getWorldPosition(_supPos);
+    u.gun.userData.magHold.getWorldPosition(_gripPos);
+    _supPos.lerp(_gripPos, clamp(mix, 0, 1));
+    if (relU > 0.2 && relU < 0.45) _supPos.y -= 0.1 * ((relU - 0.2) / 0.25);
+  } else {
+    support.getWorldPosition(_supPos);
+  }
+  grip.getWorldPosition(_gripPos);
+  grip.getWorldQuaternion(_rHandQ);
+  (relPull > 0.05 ? u.gun.userData.magHold : u.gun.userData.support).getWorldQuaternion(_lHandQ);
+  u.rUpper.getWorldPosition(_rPole);
+  _rPole.x += 0.4; _rPole.y -= 0.2; _rPole.z -= 0.2;
+  u.lUpper.getWorldPosition(_lPole);
+  _lPole.x -= 0.35; _lPole.y -= 0.28; _lPole.z += 0.05;
+  ikTwoBone(u.rUpper, u.rFore, u.rHand, _gripPos, _rPole, LEN_UPPER, LEN_FORE, _rHandQ);
+  ikTwoBone(u.lUpper, u.lFore, u.lHand, _supPos, _lPole, LEN_UPPER, LEN_FORE, _lHandQ);
 }
 
 const soldier = makeSoldier(0x2c4a4a, 0x1c2a2a, 0xd2bfa4, 0x1b1c1e);
@@ -2480,6 +2633,7 @@ function updateSoldier(dt) {
     down: player.hp <= 0, downT: player.hp <= 0 ? 1 : 0,
     hit: hitFlash, pitch: isTop() ? 0 : player.pitch,
     time: performance.now() * 0.001,
+    reloadT: player.reloadT, reloadDur: currentWep().reload,
   });
 }
 
