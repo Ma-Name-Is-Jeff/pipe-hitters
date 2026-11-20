@@ -283,6 +283,8 @@ const player = {
   pitch: 0.1,
   stance: "stand",
   slideT: 0,
+  slideMix: 0,
+  slideSide: 0,
   vault: null,
   mag: MAG,
   reserve: 180,
@@ -875,6 +877,8 @@ function resetMission() {
   player.stance = "stand";
   player.vault = null;
   player.slideT = 0;
+  player.slideMix = 0;
+  player.slideSide = 0;
   player.wep = 0;
   player.guns = [
     { mag: 30, reserve: 180, reloadT: 0 },
@@ -1348,6 +1352,20 @@ function tryVault(hit) {
   player.vel.set(0, 0, 0);
 }
 
+function slideSideAmount() {
+  const wish = wishDir();
+  let vx = player.vel.x, vz = player.vel.z;
+  if (wish.mag > 0.15) { vx = wish.x; vz = wish.z; }
+  const n = Math.hypot(vx, vz);
+  if (n < 0.08) return 0;
+  const fx = Math.sin(player.yaw), fz = Math.cos(player.yaw);
+  const rx = Math.cos(player.yaw), rz = -Math.sin(player.yaw);
+  const fwd = (vx * fx + vz * fz) / n;
+  const side = (vx * rx + vz * rz) / n;
+  const denom = Math.abs(side) + Math.max(fwd, 0.05);
+  return clamp(side / denom, -1, 1);
+}
+
 function trySlide() {
   if (!gameActive() || player.stance !== "stand" || player.vault) return;
   const spd = Math.hypot(player.vel.x, player.vel.z);
@@ -1356,11 +1374,13 @@ function trySlide() {
   if (spd < 1.2) {
     player.vel.x += dirx * 6;
     player.vel.z += dirz * 6;
+    player.slideSide = damp(player.slideSide, 0, 20, 1);
   } else {
     const nx = player.vel.x, nz = player.vel.z;
     const n = Math.hypot(nx, nz) || 1;
     player.vel.x = (nx / n) * Math.max(n, SLIDE_BOOST);
     player.vel.z = (nz / n) * Math.max(n, SLIDE_BOOST);
+    player.slideSide = slideSideAmount();
   }
   player.stance = "slide";
   player.slideT = 0.58;
@@ -1956,36 +1976,82 @@ function updateFx(dt) {
 
 function updateSoldier(dt) {
   player.bodyYaw = dampAngle(player.bodyYaw, player.yaw, 12, dt);
+  if (player.stance === "slide") player.slideSide = damp(player.slideSide, slideSideAmount(), 10, dt);
+  player.slideMix = damp(player.slideMix, player.stance === "slide" ? 1 : 0, player.stance === "slide" ? 14 : 9, dt);
+  if (player.slideMix < 0.002) player.slideMix = 0;
+
   soldier.position.set(player.pos.x, player.pos.y, player.pos.z);
   soldier.rotation.set(0, player.bodyYaw, 0);
   const u = soldier.userData;
   const spd = Math.hypot(player.vel.x, player.vel.z);
-  if (player.stance === "slide") {
-    soldier.rotation.x = 1.05;
-    soldier.position.y = 0.15;
-    u.gun.rotation.x = 0.15;
-  } else if (player.vault) {
-    const k = player.vault.t / player.vault.dur;
-    soldier.rotation.x = -0.2 * Math.sin(k * Math.PI);
+  const k = player.slideMix;
+  const side = player.slideSide;
+  const sideAmt = Math.abs(side);
+  const sign = side < 0 ? -1 : 1;
+
+  // Knee slide: on both knees, torso upright, slight lean back.
+  // Side slide: on that hip, body tilted toward the slide, legs out.
+  const kneeX = -0.28, kneeY = 0.18, kneeZ = 0;
+  const sideX = 0.08, sideY = 0.28, sideZ = -1.18 * sign;
+  const rx = kneeX + (sideX - kneeX) * sideAmt;
+  const ry = kneeY + (sideY - kneeY) * sideAmt;
+  const rz = kneeZ + (sideZ - kneeZ) * sideAmt;
+
+  if (player.vault && k < 0.2) {
+    const v = player.vault.t / player.vault.dur;
+    soldier.rotation.x = -0.2 * Math.sin(v * Math.PI);
+    soldier.rotation.z = 0;
+    soldier.position.y = player.pos.y;
     u.lLeg.rotation.x = -0.8;
     u.rLeg.rotation.x = 0.5;
-  } else if (player.crouch) {
+    u.lArm.rotation.x = 0.4;
+    u.rArm.rotation.x = -0.2;
+    u.gun.rotation.x = 0.1;
+    if (u.torso) u.torso.position.y = 1.12;
+    return;
+  }
+
+  if (player.crouch && k < 0.2) {
     soldier.rotation.x = 0.12;
-    soldier.position.y = -0.28;
+    soldier.rotation.z = 0;
+    soldier.position.y = player.pos.y - 0.28;
     u.lLeg.rotation.x = 0.55;
     u.rLeg.rotation.x = 0.55;
+    u.lArm.rotation.x = 0.15;
+    u.rArm.rotation.x = 0.1;
     u.gun.rotation.x = 0.08;
-    u.torso.position.y = 1.02;
-  } else {
-    soldier.rotation.x = 0;
-    const bob = Math.sin(player.bob * 2 * Math.PI) * Math.min(1, spd / 5);
-    u.lLeg.rotation.x = bob * 0.55;
-    u.rLeg.rotation.x = -bob * 0.55;
-    u.lArm.rotation.x = -bob * 0.25;
-    u.rArm.rotation.x = bob * 0.2;
-    u.gun.rotation.x = isTop() ? 0 : player.pitch * 0.12;
-    u.torso.position.y = 1.12 + Math.abs(bob) * 0.02;
+    if (u.torso) u.torso.position.y = 1.02;
+    return;
   }
+
+  const bob = Math.sin(player.bob * 2 * Math.PI) * Math.min(1, spd / 5);
+  const standX = 0, standY = 0, standZ = 0;
+  const standL = bob * 0.55, standR = -bob * 0.55;
+  const standLA = -bob * 0.25, standRA = bob * 0.2;
+  const standGun = isTop() ? 0 : player.pitch * 0.12;
+  const standTorso = 1.12 + Math.abs(bob) * 0.02;
+
+  // Knee: both legs folded under; side: downhill leg more extended, uphill tucked.
+  const kneeL = 1.2, kneeR = 1.35;
+  const hipL = side < 0 ? 0.35 : 0.95;
+  const hipR = side > 0 ? 0.35 : 0.95;
+  const legL = kneeL + (hipL - kneeL) * sideAmt;
+  const legR = kneeR + (hipR - kneeR) * sideAmt;
+  const armL = 0.35 + 0.25 * sideAmt;
+  const armR = 0.2 + 0.15 * sideAmt;
+  const gunX = 0.12 + 0.08 * sideAmt;
+
+  soldier.rotation.x = standX + (rx - standX) * k;
+  soldier.rotation.z = standZ + (rz - standZ) * k;
+  soldier.position.y = player.pos.y + standY + (ry - standY) * k;
+  u.lLeg.rotation.x = standL + (legL - standL) * k;
+  u.rLeg.rotation.x = standR + (legR - standR) * k;
+  u.lArm.rotation.x = standLA + (armL - standLA) * k;
+  u.rArm.rotation.x = standRA + (armR - standRA) * k;
+  u.gun.rotation.x = standGun + (gunX - standGun) * k;
+  u.lLeg.rotation.z = 0.18 * sign * sideAmt * k;
+  u.rLeg.rotation.z = 0.18 * sign * sideAmt * k;
+  if (u.torso) u.torso.position.y = standTorso;
 }
 
 function updateCamera(dt) {
