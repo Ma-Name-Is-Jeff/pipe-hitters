@@ -180,6 +180,7 @@
         <button id="optLandscape" type="button">Landscape: Off</button>
         <button id="optInvert" type="button">Invert move stick: Off</button>
         <button id="optResetView" type="button">Reset view</button>
+        <button id="optFacing" type="button">Facing: Follow view</button>
         <label class="slider">Aim sensitivity <span id="aimSensVal">70</span>
           <input type="range" id="optAimSens" min="20" max="200" value="70" />
         </label>
@@ -210,6 +211,7 @@ const btnPause = document.getElementById("btnPause");
 const btnView = document.getElementById("btnView");
 const btnResume = document.getElementById("btnResume");
 const optResetView = document.getElementById("optResetView");
+const optFacing = document.getElementById("optFacing");
 const optCamera = document.getElementById("optCamera");
 const optLandscape = document.getElementById("optLandscape");
 const optInvert = document.getElementById("optInvert");
@@ -267,7 +269,7 @@ const STORE = "pipe-hitters-settings";
 const FPS_LOOK_MOUSE = 0.004;
 const FPS_LOOK_STICK = 2.2;
 
-const settings = { camera: "top", invertMove: false, landscape: false, aimSens: 70, fpsSens: 45, assist: 70, volume: 70 };
+const settings = { camera: "top", invertMove: false, landscape: false, aimSens: 70, fpsSens: 45, assist: 70, volume: 70, facing: "follow" };
 try {
   const saved = JSON.parse(localStorage.getItem(STORE) || "null");
   if (saved && typeof saved === "object") Object.assign(settings, saved);
@@ -1455,6 +1457,7 @@ function syncUi() {
   optCamera.textContent = "Camera: " + (isTop() ? "Top-down" : "First-person");
   optLandscape.textContent = "Landscape: " + (settings.landscape ? "On" : "Off");
   optInvert.textContent = "Invert move stick: " + (settings.invertMove ? "On" : "Off");
+  if (optFacing) optFacing.textContent = "Facing: " + (followView() ? "Follow view" : "Free aim");
   optAimSens.value = String(settings.aimSens);
   optFpsSens.value = String(settings.fpsSens);
   optAssist.value = String(settings.assist);
@@ -1746,6 +1749,12 @@ optInvert.addEventListener("click", (e) => {
   saveSettings();
   syncUi();
 });
+if (optFacing) optFacing.addEventListener("click", (e) => {
+  e.stopPropagation();
+  settings.facing = followView() ? "free" : "follow";
+  saveSettings();
+  syncUi();
+});
 optAimSens.addEventListener("input", () => {
   settings.aimSens = Number(optAimSens.value);
   saveSettings();
@@ -1781,6 +1790,23 @@ function inLayoutPad(el, x, y, pad) {
 }
 
 function camYaw() { return isTop() ? viewYaw : player.yaw; }
+function followView() { return settings.facing !== "free"; }
+function cameraForwardYaw() { return viewYaw + Math.PI; }
+
+function viewAimTarget() {
+  if (touchMode) {
+    if (aimStick.mag > AIM_DEAD) return Math.atan2(aimStick.x, aimStick.y) + viewYaw;
+    return cameraForwardYaw();
+  }
+  const { w, h } = gameSize();
+  const mx = (mouse.gx / w) * 2 - 1;
+  const my = -((mouse.gy / h) * 2 - 1);
+  tmp.v.set(player.pos.x, 1, player.pos.z).project(camera);
+  const sx = mx - tmp.v.x;
+  const sy = -(my - tmp.v.y);
+  if (Math.hypot(sx, sy) <= 0.14) return cameraForwardYaw();
+  return Math.atan2(sx, sy) + viewYaw;
+}
 
 function viewTilt() { return CAM_TILT + viewPitch; }
 
@@ -2315,7 +2341,13 @@ function updateBloom(dt) {
 function updateLook(dt) {
   const turn = 10 * aimMul();
   if (isTop()) {
-    if (touchMode) {
+    if (followView()) {
+      const target = viewAimTarget();
+      const stickOn = touchMode && aimStick.mag > AIM_DEAD;
+      const curve = stickOn ? stickAimCurve(aimStick.mag) : 1;
+      const rate = stickOn ? (0.7 + 6.8 * curve) * aimMul() : 16;
+      player.yaw = moveTowardAngle(player.yaw, target, rate * dt);
+    } else if (touchMode) {
       if (aimStick.mag > AIM_DEAD) {
         const target = Math.atan2(aimStick.x, aimStick.y) + viewYaw;
         const curve = stickAimCurve(aimStick.mag);
@@ -2876,10 +2908,12 @@ function updateCamera(dt) {
   sun.target.position.set(player.pos.x, 0, player.pos.z);
   sun.target.updateMatrixWorld();
   if (isTop()) {
-    const ahead = 2.15;
+    const follow = followView();
+    const dist = follow ? 13.6 : CAM_DIST;
+    const ahead = follow ? 3.15 : 2.15;
     const tilt = viewTilt();
-    const lift = CAM_DIST * Math.sin(tilt);
-    const back = CAM_DIST * Math.cos(tilt);
+    const lift = dist * Math.sin(tilt);
+    const back = dist * Math.cos(tilt);
     const lx = player.pos.x - Math.sin(viewYaw) * ahead;
     const lz = player.pos.z - Math.cos(viewYaw) * ahead;
     tmp.w.set(lx + Math.sin(viewYaw) * back, player.pos.y + lift, lz + Math.cos(viewYaw) * back);
