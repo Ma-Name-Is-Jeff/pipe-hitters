@@ -141,8 +141,9 @@
       <div id="hint">
         WASD move · Mouse aim · Click shoot<br />
         Shift sprint · Space vault · C / Ctrl slide · R reload<br />
-        Q or 1 / 2 swap weapons · V camera · Esc pause<br />
-        Swipe or right-drag to orbit · double-tap or View to reset
+        Q or 1 / 2 swap weapons · Esc pause<br />
+        Swipe or right-drag to orbit · scroll or pinch to zoom<br />
+        Double-tap or View to reset
       </div>
     </div>
     <div id="touch">
@@ -176,7 +177,6 @@
       <div class="panel">
         <h2>PAUSED</h2>
         <button id="btnResume" type="button">Resume</button>
-        <button id="optCamera" type="button">Camera: Top-down</button>
         <button id="optLandscape" type="button">Landscape: Off</button>
         <button id="optInvert" type="button">Invert move stick: Off</button>
         <button id="optResetView" type="button">Reset view</button>
@@ -184,8 +184,8 @@
         <label class="slider">Aim sensitivity <span id="aimSensVal">70</span>
           <input type="range" id="optAimSens" min="20" max="200" value="70" />
         </label>
-        <label class="slider">First-person look <span id="fpsSensVal">45</span>
-          <input type="range" id="optFpsSens" min="20" max="200" value="45" />
+        <label class="slider">Zoom <span id="zoomVal">0</span>
+          <input type="range" id="optZoom" min="0" max="100" value="0" />
         </label>
         <label class="slider">Aim assist strength <span id="assistVal">70</span>
           <input type="range" id="optAssist" min="0" max="100" value="70" />
@@ -212,15 +212,14 @@ const btnView = document.getElementById("btnView");
 const btnResume = document.getElementById("btnResume");
 const optResetView = document.getElementById("optResetView");
 const optFacing = document.getElementById("optFacing");
-const optCamera = document.getElementById("optCamera");
 const optLandscape = document.getElementById("optLandscape");
 const optInvert = document.getElementById("optInvert");
 const optAimSens = document.getElementById("optAimSens");
-const optFpsSens = document.getElementById("optFpsSens");
+const optZoom = document.getElementById("optZoom");
 const optAssist = document.getElementById("optAssist");
 const optVolume = document.getElementById("optVolume");
 const aimSensVal = document.getElementById("aimSensVal");
-const fpsSensVal = document.getElementById("fpsSensVal");
+const zoomVal = document.getElementById("zoomVal");
 const assistVal = document.getElementById("assistVal");
 const volumeVal = document.getElementById("volumeVal");
 const ammoWarn = document.getElementById("ammoWarn");
@@ -269,17 +268,24 @@ const STORE = "pipe-hitters-settings";
 const FPS_LOOK_MOUSE = 0.004;
 const FPS_LOOK_STICK = 2.2;
 
-const settings = { camera: "top", invertMove: false, landscape: false, aimSens: 70, fpsSens: 45, assist: 70, volume: 70, facing: "follow" };
+const settings = { camera: "top", invertMove: false, landscape: false, aimSens: 70, fpsSens: 45, assist: 70, volume: 70, facing: "follow", zoom: 0 };
 try {
   const saved = JSON.parse(localStorage.getItem(STORE) || "null");
   if (saved && typeof saved === "object") Object.assign(settings, saved);
 } catch {}
+settings.camera = "top";
+{
+  const z = Number(settings.zoom);
+  settings.zoom = Number.isFinite(z) ? Math.max(0, Math.min(100, z)) : 0;
+}
 
 const keys = Object.create(null);
 const mouse = { lx: 0, ly: 0, down: false, gx: 0, gy: 0 };
 const lookPan = { held: false, id: -1, btn: -1, lx: 0, ly: 0, t0: 0, moved: 0, lastTap: 0, lastWasTap: false };
+const pinch = { a: -1, b: -1, dist: 0, ax: 0, ay: 0, bx: 0, by: 0 };
 let viewYaw = 0;
 let viewPitch = 0;
+let zoomShow = settings.zoom;
 const VIEW_PITCH_MIN = -18 * Math.PI / 180;
 const VIEW_PITCH_MAX = 12 * Math.PI / 180;
 const moveStick = { x: 0, y: 0, id: -1 };
@@ -1414,11 +1420,40 @@ function dampAngle(cur, target, lambda, dt) {
   while (d < -Math.PI) d += Math.PI * 2;
   return cur + d * (1 - Math.exp(-lambda * dt));
 }
-function isTop() { return settings.camera !== "fps"; }
+function isTop() { return true; }
 function aimMul() { return settings.aimSens / 100; }
 function fpsMul() { return (Number(settings.fpsSens) || 45) / 100; }
 function fpsMouseSens() { return FPS_LOOK_MOUSE * fpsMul(); }
 function fpsStickSens() { return FPS_LOOK_STICK * fpsMul(); }
+function zoomT(z) {
+  const t = clamp((Number(z) || 0) / 100, 0, 1);
+  return t * t * (3 - 2 * t);
+}
+function zoomRig(z, follow) {
+  const s = zoomT(z);
+  const farDist = follow ? 13.6 : CAM_DIST;
+  const farAhead = follow ? 3.15 : 2.15;
+  const farTilt = CAM_TILT;
+  const nearDist = 4.9;
+  const nearAhead = 2.05;
+  const nearTilt = 16 * Math.PI / 180;
+  const farCamY = farDist * Math.sin(farTilt);
+  return {
+    s,
+    dist: farDist + (nearDist - farDist) * s,
+    ahead: farAhead + (nearAhead - farAhead) * s,
+    tilt: farTilt + (nearTilt - farTilt) * s,
+    lookY: 1.48 * s,
+    camY: farCamY + (1.88 - farCamY) * s,
+    shoulder: 0.42 * s,
+  };
+}
+function setZoom(v, persist) {
+  settings.zoom = clamp(Number(v) || 0, 0, 100);
+  if (persist !== false) saveSettings();
+  if (optZoom) optZoom.value = String(Math.round(settings.zoom));
+  if (zoomVal) zoomVal.textContent = String(Math.round(settings.zoom));
+}
 
 function saveSettings() {
   try { localStorage.setItem(STORE, JSON.stringify(settings)); } catch {}
@@ -1454,16 +1489,15 @@ function showTouch(on) {
 }
 
 function syncUi() {
-  optCamera.textContent = "Camera: " + (isTop() ? "Top-down" : "First-person");
   optLandscape.textContent = "Landscape: " + (settings.landscape ? "On" : "Off");
   optInvert.textContent = "Invert move stick: " + (settings.invertMove ? "On" : "Off");
   if (optFacing) optFacing.textContent = "Facing: " + (followView() ? "Follow view" : "Free aim");
   optAimSens.value = String(settings.aimSens);
-  optFpsSens.value = String(settings.fpsSens);
+  if (optZoom) optZoom.value = String(Math.round(settings.zoom));
   optAssist.value = String(settings.assist);
   optVolume.value = String(settings.volume);
   aimSensVal.textContent = String(settings.aimSens);
-  fpsSensVal.textContent = String(settings.fpsSens);
+  if (zoomVal) zoomVal.textContent = String(Math.round(settings.zoom));
   assistVal.textContent = String(settings.assist);
   volumeVal.textContent = String(settings.volume);
   document.body.classList.toggle("top-down", isTop());
@@ -1478,19 +1512,11 @@ function syncUi() {
 }
 
 function applyCameraMode() {
-  if (isTop()) {
-    if (document.pointerLockElement) document.exitPointerLock();
-    cam.fov = 52;
-    camera.fov = 52;
-    camera.near = 0.2;
-    camera.far = 140;
-  } else {
-    cam.fov = 72;
-    camera.fov = 72;
-    camera.near = 0.06;
-    camera.far = 120;
-    if (playing && !paused && !touchMode) canvas.requestPointerLock();
-  }
+  if (document.pointerLockElement) document.exitPointerLock();
+  cam.fov = 52;
+  camera.fov = 52;
+  camera.near = 0.1;
+  camera.far = 280;
   camera.updateProjectionMatrix();
   syncUi();
 }
@@ -1548,12 +1574,6 @@ async function setLandscape(on) {
   syncUi();
 }
 
-function toggleCamera() {
-  settings.camera = isTop() ? "fps" : "top";
-  saveSettings();
-  applyCameraMode();
-}
-
 function resetBot(d) {
   d.hp = d.max;
   d.state = "patrol";
@@ -1575,6 +1595,7 @@ function resetBot(d) {
 
 function resetMission() {
   lookPan.held = false; lookPan.id = -1; lookPan.btn = -1; lookPan.lastTap = 0; lookPan.lastWasTap = false;
+  pinch.a = -1; pinch.b = -1; pinch.dist = 0;
   viewYaw = 0;
   viewPitch = 0;
   player.pos.set(START.x, 0, START.z);
@@ -1671,7 +1692,6 @@ function bindKeys() {
       return;
     }
     if (!gameActive()) return;
-    if (e.code === "KeyV") toggleCamera();
     if (e.code === "KeyR") startReload();
     if (e.code === "KeyQ") cycleWeapon();
     if (e.code === "Digit1" || e.code === "Numpad1") swapWeapon(0);
@@ -1741,7 +1761,6 @@ document.getElementById("btnAgain").addEventListener("click", (e) => {
   setPaused(false);
   if (!isTop() && !touchMode) canvas.requestPointerLock();
 });
-optCamera.addEventListener("click", (e) => { e.stopPropagation(); toggleCamera(); });
 optLandscape.addEventListener("click", (e) => { e.stopPropagation(); setLandscape(!settings.landscape); });
 optInvert.addEventListener("click", (e) => {
   e.stopPropagation();
@@ -1760,10 +1779,8 @@ optAimSens.addEventListener("input", () => {
   saveSettings();
   syncUi();
 });
-optFpsSens.addEventListener("input", () => {
-  settings.fpsSens = Number(optFpsSens.value);
-  saveSettings();
-  syncUi();
+optZoom.addEventListener("input", () => {
+  setZoom(Number(optZoom.value), true);
 });
 optAssist.addEventListener("input", () => {
   settings.assist = Number(optAssist.value);
@@ -1856,6 +1873,54 @@ function endLookPan() {
   lookPan.lastWasTap = wasTap;
   lookPan.lastTap = wasTap ? now : 0;
 }
+
+function pinchActive() { return pinch.a >= 0 && pinch.b >= 0; }
+
+function cancelLookPan() {
+  lookPan.held = false;
+  lookPan.id = -1;
+  lookPan.btn = -1;
+  lookPan.lastWasTap = false;
+  lookPan.lastTap = 0;
+}
+
+function beginPinch(idA, xa, ya, idB, xb, yb) {
+  cancelLookPan();
+  pinch.a = idA;
+  pinch.b = idB;
+  pinch.ax = xa;
+  pinch.ay = ya;
+  pinch.bx = xb;
+  pinch.by = yb;
+  pinch.dist = Math.max(1, Math.hypot(xb - xa, yb - ya));
+}
+
+function applyPinch(ax, ay, bx, by) {
+  const d = Math.max(1, Math.hypot(bx - ax, by - ay));
+  setZoom(settings.zoom + (pinch.dist - d) * 0.28, false);
+  pinch.dist = d;
+  pinch.ax = ax;
+  pinch.ay = ay;
+  pinch.bx = bx;
+  pinch.by = by;
+}
+
+function endPinch(ended) {
+  if (pinch.a < 0 && pinch.b < 0) return false;
+  const aGone = ended.has(pinch.a);
+  const bGone = ended.has(pinch.b);
+  if (!aGone && !bGone) return false;
+  const remain = aGone && !bGone ? pinch.b : (!aGone && bGone ? pinch.a : -1);
+  const rx = remain === pinch.a ? pinch.ax : pinch.bx;
+  const ry = remain === pinch.a ? pinch.ay : pinch.by;
+  pinch.a = -1;
+  pinch.b = -1;
+  pinch.dist = 0;
+  saveSettings();
+  syncUi();
+  if (remain >= 0 && gameActive()) startLookPan(rx, ry, remain, -1);
+  return true;
+}
 function setKnob(knob, x, y, max) {
   const l = Math.hypot(x, y);
   const s = l > max ? max / l : 1;
@@ -1894,8 +1959,13 @@ function onTouchStart(e) {
       aimStick.x = s.sx; aimStick.y = s.sy;
       aimStick.mag = Math.hypot(s.sx, s.sy);
       setKnob(knobR, s.px, s.py, s.max);
-    } else if (lookPan.id < 0 && gameActive() && isTop()) {
-      startLookPan(p.x, p.y, t.identifier, -1);
+    } else if (gameActive() && isTop()) {
+      if (pinchActive()) continue;
+      if (lookPan.id >= 0 && t.identifier !== lookPan.id) {
+        beginPinch(lookPan.id, lookPan.lx, lookPan.ly, t.identifier, p.x, p.y);
+      } else if (lookPan.id < 0) {
+        startLookPan(p.x, p.y, t.identifier, -1);
+      }
     }
   }
 }
@@ -1913,6 +1983,10 @@ function onTouchMove(e) {
       aimStick.x = s.sx; aimStick.y = s.sy;
       aimStick.mag = Math.hypot(s.sx, s.sy);
       setKnob(knobR, s.px, s.py, s.max);
+    } else if (pinchActive() && (t.identifier === pinch.a || t.identifier === pinch.b)) {
+      if (t.identifier === pinch.a) { pinch.ax = p.x; pinch.ay = p.y; }
+      else { pinch.bx = p.x; pinch.by = p.y; }
+      applyPinch(pinch.ax, pinch.ay, pinch.bx, pinch.by);
     } else if (t.identifier === lookPan.id) {
       applyLookOrbit(p.x - lookPan.lx, p.y - lookPan.ly);
       lookPan.lx = p.x;
@@ -1933,6 +2007,9 @@ function onTouchEnd(e) {
   btnVault.classList.remove("active");
   btnSlide.classList.remove("active");
   btnSwap.classList.remove("active");
+  const ended = new Set();
+  for (const t of e.changedTouches) ended.add(t.identifier);
+  endPinch(ended);
   for (const t of e.changedTouches) endTouch(t.identifier);
 }
 
@@ -1940,6 +2017,13 @@ touchEl.addEventListener("touchstart", onTouchStart, { passive: false });
 touchEl.addEventListener("touchmove", onTouchMove, { passive: false });
 touchEl.addEventListener("touchend", onTouchEnd);
 touchEl.addEventListener("touchcancel", onTouchEnd);
+
+gameEl.addEventListener("wheel", (e) => {
+  if (!playing) return;
+  if (e.target && e.target.closest && e.target.closest("#pause, #start, #win, #fail")) return;
+  e.preventDefault();
+  setZoom(settings.zoom - e.deltaY * 0.08, true);
+}, { passive: false });
 
 window.addEventListener("pointerdown", unlockAudio, { once: false });
 bindKeys();
@@ -2909,21 +2993,38 @@ function updateCamera(dt) {
   sun.target.updateMatrixWorld();
   if (isTop()) {
     const follow = followView();
-    const dist = follow ? 13.6 : CAM_DIST;
-    const ahead = follow ? 3.15 : 2.15;
-    const tilt = viewTilt();
-    const lift = dist * Math.sin(tilt);
-    const back = dist * Math.cos(tilt);
-    const lx = player.pos.x - Math.sin(viewYaw) * ahead;
-    const lz = player.pos.z - Math.cos(viewYaw) * ahead;
-    tmp.w.set(lx + Math.sin(viewYaw) * back, player.pos.y + lift, lz + Math.cos(viewYaw) * back);
-    dampV(cam.pos, tmp.w, lookPan.held ? 16 : 8.5, dt);
+    zoomShow = damp(zoomShow, settings.zoom, 10, dt);
+    const rig = zoomRig(zoomShow, follow);
+    const tilt = rig.tilt + viewPitch * (1 - 0.6 * rig.s);
+    const back = rig.dist * Math.cos(tilt);
+    const lx = player.pos.x - Math.sin(viewYaw) * rig.ahead;
+    const lz = player.pos.z - Math.cos(viewYaw) * rig.ahead;
+    const lookY = player.pos.y + rig.lookY;
+    const rx = Math.cos(viewYaw) * rig.shoulder;
+    const rz = -Math.sin(viewYaw) * rig.shoulder;
+    tmp.q.set(lx, lookY, lz);
+    const camY = player.pos.y + rig.lookY + rig.dist * Math.sin(tilt) * (1 - rig.s) + (rig.camY - rig.lookY) * rig.s;
+    tmp.w.set(lx + Math.sin(viewYaw) * back + rx, camY, lz + Math.cos(viewYaw) * back + rz);
+    tmp.v.copy(tmp.w).sub(tmp.q);
+    const want = tmp.v.length();
+    if (want > 0.2) {
+      tmp.v.multiplyScalar(1 / want);
+      const hit = worldHit(tmp.q, tmp.v, want);
+      if (hit.pt && hit.dist < want - 0.12) {
+        const d = Math.max(0.9, hit.dist - 0.28);
+        tmp.w.set(tmp.q.x + tmp.v.x * d, tmp.q.y + tmp.v.y * d, tmp.q.z + tmp.v.z * d);
+      }
+    }
+    dampV(cam.pos, tmp.w, lookPan.held || rig.s > 0.35 ? 16 : 8.5, dt);
     camera.position.copy(cam.pos);
+    const dx = cam.pos.x - lx, dz = cam.pos.z - lz;
+    const hy = Math.hypot(dx, dz);
+    const pitch = Math.atan2(cam.pos.y - lookY, Math.max(0.15, hy));
     camera.rotation.order = "YXZ";
-    camera.rotation.y = viewYaw;
-    camera.rotation.x = -tilt + cam.kickP * 0.25;
+    camera.rotation.y = Math.atan2(dx, dz);
+    camera.rotation.x = -pitch + cam.kickP * 0.25;
     camera.rotation.z = 0;
-    const wantFov = sprinting(wishDir()) ? 55 : 52;
+    const wantFov = (sprinting(wishDir()) ? 55 : 52) + 4 * rig.s;
     cam.fov = damp(cam.fov, wantFov, 6, dt);
     if (Math.abs(camera.fov - cam.fov) > 0.05) {
       camera.fov = cam.fov;
