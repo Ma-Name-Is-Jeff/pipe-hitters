@@ -83,11 +83,15 @@
       position: absolute; left: 20px; bottom: 20px; font-size: 12px; line-height: 1.55; opacity: 0.72;
       text-shadow: 0 1px 2px #000; max-width: 300px;
     }
-    #btnPause {
+    #btnPause, #btnView {
       position: absolute; top: max(12px, env(safe-area-inset-top, 0px)); right: max(12px, env(safe-area-inset-right, 0px));
       width: 48px; height: 48px; border-radius: 10px; border: 2px solid rgba(232, 220, 200, 0.4);
       background: rgba(14, 18, 16, 0.55); color: #e8dcc8; font-size: 16px; letter-spacing: 0.08em;
       pointer-events: auto; z-index: 6; cursor: pointer;
+    }
+    #btnView {
+      top: calc(max(12px, env(safe-area-inset-top, 0px)) + 56px);
+      font-size: 9px; letter-spacing: 0.06em; line-height: 1.15;
     }
     #pause .panel {
       width: min(420px, 92%); max-height: 90%; overflow-y: auto; background: rgba(18, 22, 20, 0.94); border: 1px solid rgba(232, 220, 200, 0.22);
@@ -138,7 +142,7 @@
         WASD move · Mouse aim · Click shoot<br />
         Shift sprint · Space vault · C / Ctrl slide · R reload<br />
         Q or 1 / 2 swap weapons · V camera · Esc pause<br />
-        Swipe empty space or right-drag to look around
+        Swipe or right-drag to orbit · double-tap or View to reset
       </div>
     </div>
     <div id="touch">
@@ -149,6 +153,7 @@
       <div class="tbtn" id="btnSwap">SWAP</div>
     </div>
     <button id="btnPause" class="hidden" type="button" aria-label="Pause">II</button>
+    <button id="btnView" class="hidden" type="button" aria-label="Reset view">VIEW</button>
     <div id="start">
       <h1>PIPE HITTERS</h1>
       <p>Click or tap to start. Move with the left stick or WASD, aim with the right stick or the mouse, and push north through the compound to the gate.</p>
@@ -174,6 +179,7 @@
         <button id="optCamera" type="button">Camera: Top-down</button>
         <button id="optLandscape" type="button">Landscape: Off</button>
         <button id="optInvert" type="button">Invert move stick: Off</button>
+        <button id="optResetView" type="button">Reset view</button>
         <label class="slider">Aim sensitivity <span id="aimSensVal">70</span>
           <input type="range" id="optAimSens" min="20" max="200" value="70" />
         </label>
@@ -201,7 +207,9 @@ const canvas = document.getElementById("c");
 const startEl = document.getElementById("start");
 const pauseEl = document.getElementById("pause");
 const btnPause = document.getElementById("btnPause");
+const btnView = document.getElementById("btnView");
 const btnResume = document.getElementById("btnResume");
+const optResetView = document.getElementById("optResetView");
 const optCamera = document.getElementById("optCamera");
 const optLandscape = document.getElementById("optLandscape");
 const optInvert = document.getElementById("optInvert");
@@ -265,9 +273,11 @@ try {
 
 const keys = Object.create(null);
 const mouse = { lx: 0, ly: 0, down: false, gx: 0, gy: 0 };
-const lookPan = { x: 0, z: 0, held: false, id: -1, btn: -1, lx: 0, ly: 0, rest: 0 };
-const LOOK_PAN_MAX = 22;
-const LOOK_PAN_DELAY = 0.4;
+const lookPan = { held: false, id: -1, btn: -1, lx: 0, ly: 0, t0: 0, moved: 0, lastTap: 0, lastWasTap: false };
+let viewYaw = 0;
+let viewPitch = 0;
+const VIEW_PITCH_MIN = -18 * Math.PI / 180;
+const VIEW_PITCH_MAX = 12 * Math.PI / 180;
 const moveStick = { x: 0, y: 0, id: -1 };
 const aimStick = { x: 0, y: 0, id: -1, mag: 0 };
 let touchMode = false;
@@ -1457,6 +1467,7 @@ function syncUi() {
   soldier.visible = isTop();
   viewGun.visible = !isTop();
   touchEl.classList.toggle("show", touchMode && playing && !paused);
+  if (btnView) btnView.classList.toggle("hidden", !playing || !isTop());
 }
 
 function applyCameraMode() {
@@ -1490,6 +1501,7 @@ function setPlaying(on) {
   playing = on;
   startEl.classList.toggle("hidden", on);
   btnPause.classList.toggle("hidden", !on);
+  if (btnView) btnView.classList.toggle("hidden", !on || !isTop());
   if (!on) setPaused(false);
   syncUi();
 }
@@ -1555,7 +1567,9 @@ function resetBot(d) {
 }
 
 function resetMission() {
-  lookPan.x = 0; lookPan.z = 0; lookPan.held = false; lookPan.id = -1; lookPan.btn = -1; lookPan.rest = 0;
+  lookPan.held = false; lookPan.id = -1; lookPan.btn = -1; lookPan.lastTap = 0; lookPan.lastWasTap = false;
+  viewYaw = 0;
+  viewPitch = 0;
   player.pos.set(START.x, 0, START.z);
   player.vel.set(0, 0, 0);
   player.yaw = START.yaw;
@@ -1682,7 +1696,7 @@ function bindKeys() {
     mouse.gy = p.y;
     if (!gameActive() || touchMode) return;
     if (lookPan.held && lookPan.btn >= 0 && isTop()) {
-      applyLookPan(p.x - lookPan.lx, p.y - lookPan.ly);
+      applyLookOrbit(p.x - lookPan.lx, p.y - lookPan.ly);
       lookPan.lx = p.x;
       lookPan.ly = p.y;
       return;
@@ -1705,6 +1719,8 @@ startEl.addEventListener("touchstart", (e) => {
 }, { passive: false });
 
 btnPause.addEventListener("click", (e) => { e.stopPropagation(); if (playing) setPaused(true); });
+if (btnView) btnView.addEventListener("click", (e) => { e.stopPropagation(); if (gameActive() && isTop()) resetView(); });
+if (optResetView) optResetView.addEventListener("click", (e) => { e.stopPropagation(); resetView(); });
 btnResume.addEventListener("click", (e) => { e.stopPropagation(); setPaused(false); });
 document.getElementById("btnRetry").addEventListener("click", (e) => {
   e.stopPropagation();
@@ -1760,37 +1776,55 @@ function inLayoutPad(el, x, y, pad) {
     y >= el.offsetTop - pad && y <= el.offsetTop + el.offsetHeight + pad;
 }
 
-function applyLookPan(dx, dy) {
-  const { w } = gameSize();
-  const scale = 28 / Math.max(w, 1);
-  lookPan.x = clamp(lookPan.x + dx * scale, -LOOK_PAN_MAX, LOOK_PAN_MAX);
-  lookPan.z = clamp(lookPan.z + dy * scale, -LOOK_PAN_MAX, LOOK_PAN_MAX);
-  lookPan.rest = 0;
+function camYaw() { return isTop() ? viewYaw : player.yaw; }
+
+function viewTilt() { return CAM_TILT + viewPitch; }
+
+function resetView() {
+  viewYaw = player.yaw + Math.PI;
+  viewPitch = 0;
+  lookPan.held = false;
+  lookPan.id = -1;
+  lookPan.btn = -1;
+  lookPan.lastTap = 0;
+  lookPan.lastWasTap = false;
 }
 
-function updateLookPan(dt) {
-  if (lookPan.held) { lookPan.rest = 0; return; }
-  lookPan.rest += dt;
-  if (lookPan.rest >= LOOK_PAN_DELAY) {
-    lookPan.x = damp(lookPan.x, 0, 4.2, dt);
-    lookPan.z = damp(lookPan.z, 0, 4.2, dt);
-    if (Math.hypot(lookPan.x, lookPan.z) < 0.03) { lookPan.x = 0; lookPan.z = 0; }
-  }
+function applyLookOrbit(dx, dy) {
+  const { w } = gameSize();
+  const yawScale = 1.35 * Math.PI / Math.max(w, 1);
+  const pitchScale = 0.7 / Math.max(w, 1);
+  viewYaw -= dx * yawScale;
+  viewPitch = clamp(viewPitch + dy * pitchScale, VIEW_PITCH_MIN, VIEW_PITCH_MAX);
+  lookPan.moved += Math.hypot(dx, dy);
 }
 
 function startLookPan(x, y, id, btn) {
+  const now = performance.now();
+  if (btn < 0 && lookPan.lastWasTap && now - lookPan.lastTap < 320) {
+    resetView();
+    lookPan.lastWasTap = false;
+    lookPan.lastTap = 0;
+    return false;
+  }
   lookPan.held = true;
   lookPan.id = id;
   lookPan.btn = btn;
   lookPan.lx = x;
   lookPan.ly = y;
-  lookPan.rest = 0;
+  lookPan.t0 = now;
+  lookPan.moved = 0;
+  return true;
 }
 
 function endLookPan() {
+  const now = performance.now();
+  const wasTap = lookPan.held && (now - lookPan.t0) < 280 && lookPan.moved < 18;
   lookPan.held = false;
   lookPan.id = -1;
   lookPan.btn = -1;
+  lookPan.lastWasTap = wasTap;
+  lookPan.lastTap = wasTap ? now : 0;
 }
 function setKnob(knob, x, y, max) {
   const l = Math.hypot(x, y);
@@ -1850,7 +1884,7 @@ function onTouchMove(e) {
       aimStick.mag = Math.hypot(s.sx, s.sy);
       setKnob(knobR, s.px, s.py, s.max);
     } else if (t.identifier === lookPan.id) {
-      applyLookPan(p.x - lookPan.lx, p.y - lookPan.ly);
+      applyLookOrbit(p.x - lookPan.lx, p.y - lookPan.ly);
       lookPan.lx = p.x;
       lookPan.ly = p.y;
     }
@@ -1949,8 +1983,8 @@ function screenAxesToWish(sx, sy, invert, top, yaw) {
   const len = Math.hypot(sx, sy);
   if (len > 1) { sx /= len; sy /= len; }
   const mag = Math.min(1, len);
-  if (top) return { x: sx, z: -sy, lx: sx, lz: sy, mag };
   const c = Math.cos(yaw), s = Math.sin(yaw);
+  if (top) return { x: sx * c - sy * s, z: -sx * s - sy * c, lx: sx, lz: sy, mag };
   return { x: sx * c + sy * s, z: -sx * s + sy * c, lx: sx, lz: sy, mag };
 }
 
@@ -1970,13 +2004,13 @@ function wishDir() {
   if (touchMode) {
     sx = moveStick.x;
     sy = -moveStick.y;
-    return screenAxesToWish(sx, sy, settings.invertMove, isTop(), player.yaw);
+    return screenAxesToWish(sx, sy, settings.invertMove, isTop(), camYaw());
   }
   if (keys.KeyW || keys.ArrowUp) sy += 1;
   if (keys.KeyS || keys.ArrowDown) sy -= 1;
   if (keys.KeyA || keys.ArrowLeft) sx -= 1;
   if (keys.KeyD || keys.ArrowRight) sx += 1;
-  return screenAxesToWish(sx, sy, settings.invertMove && isTop(), isTop(), player.yaw);
+  return screenAxesToWish(sx, sy, settings.invertMove && isTop(), isTop(), camYaw());
 }
 
 function slideMoveDir() {
@@ -2226,7 +2260,7 @@ function updateLook(dt) {
   if (isTop()) {
     if (touchMode) {
       if (aimStick.mag > AIM_DEAD) {
-        const target = Math.atan2(aimStick.x, aimStick.y);
+        const target = Math.atan2(aimStick.x, aimStick.y) + viewYaw;
         const curve = stickAimCurve(aimStick.mag);
         const rate = (0.7 + 6.8 * curve) * aimMul();
         player.yaw = moveTowardAngle(player.yaw, target, rate * dt);
@@ -2763,19 +2797,19 @@ function updateCamera(dt) {
   sun.position.set(player.pos.x + 16, 30, player.pos.z + 10);
   sun.target.position.set(player.pos.x, 0, player.pos.z);
   sun.target.updateMatrixWorld();
-  updateLookPan(dt);
   if (isTop()) {
     const ahead = 2.15;
-    const lx = player.pos.x + Math.sin(player.yaw) * ahead + lookPan.x;
-    const lz = player.pos.z + Math.cos(player.yaw) * ahead + lookPan.z;
-    const lift = CAM_DIST * Math.sin(CAM_TILT);
-    const back = CAM_DIST * Math.cos(CAM_TILT);
-    tmp.w.set(lx, player.pos.y + lift, lz + back);
-    dampV(cam.pos, tmp.w, 7.5, dt);
+    const tilt = viewTilt();
+    const lift = CAM_DIST * Math.sin(tilt);
+    const back = CAM_DIST * Math.cos(tilt);
+    const lx = player.pos.x - Math.sin(viewYaw) * ahead;
+    const lz = player.pos.z - Math.cos(viewYaw) * ahead;
+    tmp.w.set(lx + Math.sin(viewYaw) * back, player.pos.y + lift, lz + Math.cos(viewYaw) * back);
+    dampV(cam.pos, tmp.w, lookPan.held ? 16 : 8.5, dt);
     camera.position.copy(cam.pos);
     camera.rotation.order = "YXZ";
-    camera.rotation.y = 0;
-    camera.rotation.x = -CAM_TILT + cam.kickP * 0.25;
+    camera.rotation.y = viewYaw;
+    camera.rotation.x = -tilt + cam.kickP * 0.25;
     camera.rotation.z = 0;
     const wantFov = sprinting(wishDir()) ? 55 : 52;
     cam.fov = damp(cam.fov, wantFov, 6, dt);
