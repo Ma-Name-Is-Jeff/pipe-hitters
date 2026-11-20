@@ -248,9 +248,9 @@ const CAM_DIST = 16.5;
 const AIM_DEAD = 0.16;
 const FIRE_STICK = 0.75;
 const AIM_RANGE = 22;
-const WORLD = 202.5;
-const START = { x: 0, z: 175, yaw: Math.PI };
-const EXTRACT = { x: 0, z: -176, r: 5.2 };
+const WORLD = 101.25;
+const START = { x: 0, z: 87.5, yaw: Math.PI };
+const EXTRACT = { x: 0, z: -88, r: 4.6 };
 const AIM_CONE = 14 * Math.PI / 180;
 const AIM_SPEED = 0.5;
 const STORE = "pipe-hitters-settings";
@@ -495,7 +495,7 @@ function buildCompound() {
   scene.add(ground);
 
   const road = new THREE.Mesh(
-    new THREE.PlaneGeometry(28, WORLD * 2 - 8),
+    new THREE.PlaneGeometry(16, WORLD * 2 - 6),
     new THREE.MeshLambertMaterial({ color: COL.road })
   );
   road.rotation.x = -Math.PI / 2;
@@ -504,7 +504,7 @@ function buildCompound() {
   scene.add(road);
 
   const startPad = new THREE.Mesh(
-    new THREE.PlaneGeometry(18, 16),
+    new THREE.PlaneGeometry(12, 10),
     new THREE.MeshLambertMaterial({ color: COL.pad })
   );
   startPad.rotation.x = -Math.PI / 2;
@@ -513,7 +513,7 @@ function buildCompound() {
   scene.add(startPad);
 
   const exPad = new THREE.Mesh(
-    new THREE.PlaneGeometry(16, 14),
+    new THREE.PlaneGeometry(12, 10),
     new THREE.MeshLambertMaterial({ color: COL.extract })
   );
   exPad.rotation.x = -Math.PI / 2;
@@ -521,66 +521,62 @@ function buildCompound() {
   exPad.receiveShadow = true;
   scene.add(exPad);
 
-  const W = WORLD, periH = 3.4, periT = 1.5, gap = 9;
+  const W = WORLD, periH = 3.4, periT = 1.4, gap = 7;
   addWallX(-W, (-W - gap) * 0.5, W - gap, false, periH, COL.peri, periT);
   addWallX(-W, (W + gap) * 0.5, W - gap, false, periH, COL.peri, periT);
   addWallX(W, 0, W * 2 + periT, false, periH, COL.peri, periT);
   addWallZ(-W, 0, W * 2 + periT, false, periH, COL.peri, periT);
   addWallZ(W, 0, W * 2 + periT, false, periH, COL.peri, periT);
 
-  addBuilding(-52, 142, 64, 40, { e: 0, n: 10 }, { div: "x", divDoor: 4 });
-  addBuilding(54, 140, 64, 42, { w: 0, n: -8 }, { div: "x", divDoor: -4 });
-  addBuilding(-78, 42, 56, 44, { e: 0, s: 8 }, { div: "z", divDoor: 0 });
-  addBuilding(80, 36, 68, 48, { w: 2, n: -10 }, { div: "z", divDoor: 6 });
-  addBuilding(-88, -96, 80, 56, { e: -8, s: 10 }, { div: "x", divDoor: 0 });
-  addBuilding(78, -112, 52, 48, { w: 0, s: -6 }, { div: "z", divDoor: 0 });
-  addBuilding(28, -180, 18, 16, { w: 0 }, { h: 2.6 });
+  addBuilding(-28, 70, 34, 22, { e: 0, n: 5 }, { div: "x", divDoor: 2 });
+  addBuilding(28, 69, 34, 22, { w: 0, n: -4 }, { div: "x", divDoor: -2 });
+  addBuilding(-40, 20, 30, 24, { e: 0, s: 4 }, { div: "z", divDoor: 0 });
+  addBuilding(41, 17, 34, 26, { w: 1, n: -5 }, { div: "z", divDoor: 3 });
+  addBuilding(-44, -48, 42, 30, { e: -4, s: 5 }, { div: "x", divDoor: 0 });
+  addBuilding(40, -56, 28, 26, { w: 0, s: -3 }, { div: "z", divDoor: 0 });
 
-  addCluster(-8, 162);
-  addCluster(11, 156);
-  addCluster(-22, 128);
-  addCluster(20, 124);
-  addCluster(8, 88);
-  addCluster(-14, 54);
-  addCluster(18, 22);
-  addCluster(-28, -8);
-  addCluster(10, -48);
-  addCluster(-40, -58);
-  addCluster(36, -78);
-  addCluster(-16, -150);
-  addCluster(12, -158);
-  addCrate(-6, 148, 1.0, COL.crate2, 1.5);
-  addCrate(24, -100, 1.2, COL.crate, 1.5);
-  addCrate(-170, 20, 1.3, COL.crate, 1.1);
-  addCrate(168, -30, 1.3, COL.crate2, 1.1);
-  addCrate(170, -28, 1.1, COL.crate, 1.0);
-  addCrate(-168, -80, 1.2, COL.crate2, 1.0);
+  addCluster(-5, 80);
+  addCluster(7, 77);
+  addCluster(-12, 58);
+  addCluster(11, 56);
+  addCluster(5, 38);
+  addCluster(-8, 24);
+  addCluster(10, 8);
+  addCluster(-14, -6);
+  addCluster(-20, -30);
+  addCluster(18, -40);
+  addCluster(-8, -74);
+  addCluster(7, -80);
+  addCrate(-4, 73, 1.0, COL.crate2, 1.5);
+  addCrate(13, -50, 1.2, COL.crate, 1.5);
+  addCrate(-84, 10, 1.2, COL.crate, 1.1);
+  addCrate(84, -14, 1.2, COL.crate2, 1.1);
 
-  addLow(-10, 148, 4.2, 0.42, 0.85);
-  addLow(8, 136, 0.42, 5.0, 0.88);
-  addLow(0, 96, 6.0, 0.42, 0.8);
-  addLow(-24, 70, 0.45, 5.5, 0.9);
-  addLow(14, 58, 5.2, 0.42, 0.82);
-  addLow(-6, 16, 0.42, 6.4, 0.88);
-  addLow(20, -12, 4.8, 0.42, 0.8);
-  addLow(-18, -36, 5.5, 0.42, 0.85);
-  addLow(8, -88, 0.42, 5.2, 0.9);
-  addLow(-22, -140, 4.4, 0.42, 0.85);
-  addLow(16, -164, 0.42, 4.8, 0.88);
+  addLow(-6, 73, 3.4, 0.42, 0.85);
+  addLow(5, 62, 0.42, 4.0, 0.88);
+  addLow(0, 44, 4.4, 0.42, 0.8);
+  addLow(-13, 32, 0.45, 4.2, 0.9);
+  addLow(8, 26, 4.0, 0.42, 0.82);
+  addLow(-4, 4, 0.42, 4.6, 0.88);
+  addLow(10, -8, 3.6, 0.42, 0.8);
+  addLow(-10, -20, 4.0, 0.42, 0.85);
+  addLow(5, -44, 0.42, 4.0, 0.9);
+  addLow(-8, -72, 3.6, 0.42, 0.85);
+  addLow(8, -82, 0.42, 3.6, 0.88);
 
-  addHurdle(0, 108, false);
-  addHurdle(6, 48, false);
-  addHurdle(-5, -6, false);
-  addHurdle(10, -120, true);
+  addHurdle(0, 50, false);
+  addHurdle(4, 22, false);
+  addHurdle(-3, -4, false);
+  addHurdle(6, -62, true);
 
-  addDeco(0, 0.03, START.z - 3, 0.8, 0.02, 3.2, COL.mark);
-  addDeco(-0.7, 0.03, START.z - 4.4, 0.6, 0.02, 0.6, COL.mark);
-  addDeco(0.7, 0.03, START.z - 4.4, 0.6, 0.02, 0.6, COL.mark);
-  addDeco(0, 0.03, EXTRACT.z + 1, 6.5, 0.02, 0.7, COL.mark);
-  addDeco(0, 0.03, EXTRACT.z - 1.2, 4.5, 0.02, 0.55, COL.mark);
-  addSolid(-8.5, 0, -200.4, 1.4, 3.8, 1.4, COL.peri, false, false);
-  addSolid(8.5, 0, -200.4, 1.4, 3.8, 1.4, COL.peri, false, false);
-  addDeco(0, 3.5, -200.4, 16, 0.35, 0.7, COL.mark);
+  addDeco(0, 0.03, START.z - 2.2, 0.8, 0.02, 2.6, COL.mark);
+  addDeco(-0.7, 0.03, START.z - 3.4, 0.6, 0.02, 0.6, COL.mark);
+  addDeco(0.7, 0.03, START.z - 3.4, 0.6, 0.02, 0.6, COL.mark);
+  addDeco(0, 0.03, EXTRACT.z + 0.8, 5.2, 0.02, 0.7, COL.mark);
+  addDeco(0, 0.03, EXTRACT.z - 1.0, 3.6, 0.02, 0.55, COL.mark);
+  addSolid(-5.2, 0, -100.2, 1.2, 3.6, 1.2, COL.peri, false, false);
+  addSolid(5.2, 0, -100.2, 1.2, 3.6, 1.2, COL.peri, false, false);
+  addDeco(0, 3.3, -100.2, 11, 0.32, 0.65, COL.mark);
 
   flushLevel();
 }
@@ -1137,30 +1133,21 @@ function placeDummy(x, z, facing, wps) {
   return d;
 }
 
-placeDummy(-10, 158, 0.2, [{ x: -8, z: 156 }, { x: -14, z: 162 }]);
-placeDummy(12, 150, -0.3, [{ x: 14, z: 148 }, { x: 8, z: 154 }]);
-placeDummy(-18, 128, 1.2, [{ x: -16, z: 124 }, { x: -22, z: 132 }]);
-placeDummy(18, 124, -1.4, [{ x: 20, z: 120 }, { x: 14, z: 128 }]);
-placeDummy(-8, 110, 0.1, [{ x: -6, z: 106 }, { x: -12, z: 114 }]);
-placeDummy(0, 40, 0.2, [{ x: 3, z: 38 }, { x: -4, z: 44 }]);
-placeDummy(16, 18, -0.4, [{ x: 18, z: 16 }, { x: 12, z: 22 }]);
-placeDummy(-22, 8, 2.2, [{ x: -20, z: 6 }, { x: -26, z: 12 }]);
-placeDummy(-36, -58, 1.0, [{ x: -34, z: -54 }, { x: -40, z: -62 }]);
-placeDummy(-70, -88, 0.4, [{ x: -66, z: -84 }, { x: -76, z: -94 }]);
-placeDummy(-100, -104, -0.2, [{ x: -96, z: -100 }, { x: -106, z: -110 }]);
-placeDummy(40, -70, -1.8, [{ x: 42, z: -66 }, { x: 36, z: -74 }]);
-placeDummy(28, -100, 2.8, [{ x: 30, z: -96 }, { x: 24, z: -104 }]);
-placeDummy(50, -40, 0.6, [{ x: 52, z: -36 }, { x: 46, z: -44 }]);
-placeDummy(-12, -168, 0.1, [{ x: -10, z: -164 }, { x: -16, z: -172 }]);
-placeDummy(14, -172, -0.2, [{ x: 16, z: -168 }, { x: 10, z: -176 }]);
+placeDummy(-5, 79, 0.2, [{ x: -3, z: 77 }, { x: -8, z: 82 }]);
+placeDummy(6, 75, -0.3, [{ x: 8, z: 73 }, { x: 3, z: 78 }]);
+placeDummy(0, 20, 0.2, [{ x: 3, z: 18 }, { x: -3, z: 23 }]);
+placeDummy(8, 9, -0.4, [{ x: 10, z: 7 }, { x: 5, z: 12 }]);
+placeDummy(-11, 4, 2.2, [{ x: -9, z: 2 }, { x: -14, z: 7 }]);
+placeDummy(-18, -29, 1.0, [{ x: -16, z: -26 }, { x: -22, z: -32 }]);
+placeDummy(-35, -44, 0.4, [{ x: -32, z: -41 }, { x: -38, z: -48 }]);
+placeDummy(-6, -84, 0.1, [{ x: -4, z: -81 }, { x: -9, z: -87 }]);
+placeDummy(7, -86, -0.2, [{ x: 9, z: -83 }, { x: 4, z: -88 }]);
 
-spawnAmmoPickup(4, 168, { carbine: 40, sweeper: 8, respawn: 18 });
-spawnAmmoPickup(-18, 140, { carbine: 40, sweeper: 8, respawn: 20 });
-spawnAmmoPickup(10, 50, { carbine: 40, sweeper: 8, respawn: 18 });
-spawnAmmoPickup(-48, 40, { carbine: 40, sweeper: 8, respawn: 22 });
-spawnAmmoPickup(-40, -70, { carbine: 40, sweeper: 8, respawn: 19 });
-spawnAmmoPickup(48, -90, { carbine: 40, sweeper: 8, respawn: 20 });
-spawnAmmoPickup(8, -160, { carbine: 40, sweeper: 8, respawn: 22 });
+spawnAmmoPickup(2, 84, { carbine: 40, sweeper: 8, respawn: 18 });
+spawnAmmoPickup(5, 25, { carbine: 40, sweeper: 8, respawn: 18 });
+spawnAmmoPickup(-24, -29, { carbine: 40, sweeper: 8, respawn: 20 });
+spawnAmmoPickup(24, -45, { carbine: 40, sweeper: 8, respawn: 20 });
+spawnAmmoPickup(4, -80, { carbine: 40, sweeper: 8, respawn: 22 });
 
 
 for (let i = 0; i < 18; i++) {
