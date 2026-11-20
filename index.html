@@ -103,7 +103,7 @@
     #pause label.slider span { float: right; opacity: 0.7; }
     #pause input[type="range"] { width: 100%; margin-top: 6px; accent-color: #f3c14a; }
     #touch { position: absolute; inset: 0; pointer-events: none; z-index: 4; display: none; }
-    #touch.show { display: block; }
+    #touch.show { display: block; pointer-events: auto; }
     .stick, .tbtn {
       position: absolute; pointer-events: auto; border: 2px solid rgba(232, 220, 200, 0.35);
       background: rgba(14, 18, 16, 0.32);
@@ -137,7 +137,8 @@
       <div id="hint">
         WASD move · Mouse aim · Click shoot<br />
         Shift sprint · Space vault · C / Ctrl slide · R reload<br />
-        Q or 1 / 2 swap weapons · V camera · Esc pause
+        Q or 1 / 2 swap weapons · V camera · Esc pause<br />
+        Swipe empty space or right-drag to look around
       </div>
     </div>
     <div id="touch">
@@ -264,6 +265,9 @@ try {
 
 const keys = Object.create(null);
 const mouse = { lx: 0, ly: 0, down: false, gx: 0, gy: 0 };
+const lookPan = { x: 0, z: 0, held: false, id: -1, btn: -1, lx: 0, ly: 0, rest: 0 };
+const LOOK_PAN_MAX = 22;
+const LOOK_PAN_DELAY = 0.4;
 const moveStick = { x: 0, y: 0, id: -1 };
 const aimStick = { x: 0, y: 0, id: -1, mag: 0 };
 let touchMode = false;
@@ -1551,6 +1555,7 @@ function resetBot(d) {
 }
 
 function resetMission() {
+  lookPan.x = 0; lookPan.z = 0; lookPan.held = false; lookPan.id = -1; lookPan.btn = -1; lookPan.rest = 0;
   player.pos.set(START.x, 0, START.z);
   player.vel.set(0, 0, 0);
   player.yaw = START.yaw;
@@ -1656,18 +1661,32 @@ function bindKeys() {
   window.addEventListener("keyup", (e) => { keys[e.code] = false; });
   window.addEventListener("contextmenu", (e) => e.preventDefault());
   window.addEventListener("mousedown", (e) => {
-    if (e.button !== 0) return;
     if (e.target && e.target.closest && e.target.closest("button, input, .panel, #pause, #start, #btnPause")) return;
-    if (gameActive()) mouse.down = true;
+    if (e.button === 0) {
+      if (gameActive()) mouse.down = true;
+      return;
+    }
+    if ((e.button === 1 || e.button === 2) && gameActive() && !touchMode && isTop()) {
+      const p = toGamePoint(e.clientX, e.clientY);
+      startLookPan(p.x, p.y, -1, e.button);
+      e.preventDefault();
+    }
   });
   window.addEventListener("mouseup", (e) => {
     if (e.button === 0) mouse.down = false;
+    if (e.button === lookPan.btn) endLookPan();
   });
   document.addEventListener("mousemove", (e) => {
     const p = toGamePoint(e.clientX, e.clientY);
     mouse.gx = p.x;
     mouse.gy = p.y;
     if (!gameActive() || touchMode) return;
+    if (lookPan.held && lookPan.btn >= 0 && isTop()) {
+      applyLookPan(p.x - lookPan.lx, p.y - lookPan.ly);
+      lookPan.lx = p.x;
+      lookPan.ly = p.y;
+      return;
+    }
     if (!isTop() && document.pointerLockElement === canvas) {
       mouse.lx += e.movementX;
       mouse.ly += e.movementY;
@@ -1735,6 +1754,44 @@ function inLayoutBox(el, x, y) {
   return x >= el.offsetLeft && x <= el.offsetLeft + el.offsetWidth &&
     y >= el.offsetTop && y <= el.offsetTop + el.offsetHeight;
 }
+function inLayoutPad(el, x, y, pad) {
+  pad = pad || 0;
+  return x >= el.offsetLeft - pad && x <= el.offsetLeft + el.offsetWidth + pad &&
+    y >= el.offsetTop - pad && y <= el.offsetTop + el.offsetHeight + pad;
+}
+
+function applyLookPan(dx, dy) {
+  const { w } = gameSize();
+  const scale = 28 / Math.max(w, 1);
+  lookPan.x = clamp(lookPan.x + dx * scale, -LOOK_PAN_MAX, LOOK_PAN_MAX);
+  lookPan.z = clamp(lookPan.z + dy * scale, -LOOK_PAN_MAX, LOOK_PAN_MAX);
+  lookPan.rest = 0;
+}
+
+function updateLookPan(dt) {
+  if (lookPan.held) { lookPan.rest = 0; return; }
+  lookPan.rest += dt;
+  if (lookPan.rest >= LOOK_PAN_DELAY) {
+    lookPan.x = damp(lookPan.x, 0, 4.2, dt);
+    lookPan.z = damp(lookPan.z, 0, 4.2, dt);
+    if (Math.hypot(lookPan.x, lookPan.z) < 0.03) { lookPan.x = 0; lookPan.z = 0; }
+  }
+}
+
+function startLookPan(x, y, id, btn) {
+  lookPan.held = true;
+  lookPan.id = id;
+  lookPan.btn = btn;
+  lookPan.lx = x;
+  lookPan.ly = y;
+  lookPan.rest = 0;
+}
+
+function endLookPan() {
+  lookPan.held = false;
+  lookPan.id = -1;
+  lookPan.btn = -1;
+}
 function setKnob(knob, x, y, max) {
   const l = Math.hypot(x, y);
   const s = l > max ? max / l : 1;
@@ -1762,18 +1819,19 @@ function onTouchStart(e) {
     if (inLayoutBox(btnVault, p.x, p.y)) { btnVault.classList.add("active"); tryVault(); continue; }
     if (inLayoutBox(btnSlide, p.x, p.y)) { btnSlide.classList.add("active"); trySlide(); continue; }
     if (inLayoutBox(btnSwap, p.x, p.y)) { btnSwap.classList.add("active"); cycleWeapon(); continue; }
-    const mid = gameSize().w * 0.5;
-    if (p.x < mid && moveStick.id < 0) {
+    if (inLayoutPad(stickL, p.x, p.y, 18) && moveStick.id < 0) {
       moveStick.id = t.identifier;
       const s = stickFromPoint(stickL, p.x, p.y);
       moveStick.x = s.sx; moveStick.y = s.sy;
       setKnob(knobL, s.px, s.py, s.max);
-    } else if (p.x >= mid && aimStick.id < 0) {
+    } else if (inLayoutPad(stickR, p.x, p.y, 18) && aimStick.id < 0) {
       aimStick.id = t.identifier;
       const s = stickFromPoint(stickR, p.x, p.y);
       aimStick.x = s.sx; aimStick.y = s.sy;
       aimStick.mag = Math.hypot(s.sx, s.sy);
       setKnob(knobR, s.px, s.py, s.max);
+    } else if (lookPan.id < 0 && gameActive() && isTop()) {
+      startLookPan(p.x, p.y, t.identifier, -1);
     }
   }
 }
@@ -1791,6 +1849,10 @@ function onTouchMove(e) {
       aimStick.x = s.sx; aimStick.y = s.sy;
       aimStick.mag = Math.hypot(s.sx, s.sy);
       setKnob(knobR, s.px, s.py, s.max);
+    } else if (t.identifier === lookPan.id) {
+      applyLookPan(p.x - lookPan.lx, p.y - lookPan.ly);
+      lookPan.lx = p.x;
+      lookPan.ly = p.y;
     }
   }
 }
@@ -1801,6 +1863,7 @@ function endTouch(id) {
   if (id === aimStick.id) {
     aimStick.id = -1; aimStick.x = 0; aimStick.y = 0; aimStick.mag = 0; resetKnob(knobR);
   }
+  if (id === lookPan.id) endLookPan();
 }
 function onTouchEnd(e) {
   btnVault.classList.remove("active");
@@ -2700,10 +2763,11 @@ function updateCamera(dt) {
   sun.position.set(player.pos.x + 16, 30, player.pos.z + 10);
   sun.target.position.set(player.pos.x, 0, player.pos.z);
   sun.target.updateMatrixWorld();
+  updateLookPan(dt);
   if (isTop()) {
     const ahead = 2.15;
-    const lx = player.pos.x + Math.sin(player.yaw) * ahead;
-    const lz = player.pos.z + Math.cos(player.yaw) * ahead;
+    const lx = player.pos.x + Math.sin(player.yaw) * ahead + lookPan.x;
+    const lz = player.pos.z + Math.cos(player.yaw) * ahead + lookPan.z;
     const lift = CAM_DIST * Math.sin(CAM_TILT);
     const back = CAM_DIST * Math.cos(CAM_TILT);
     tmp.w.set(lx, player.pos.y + lift, lz + back);
