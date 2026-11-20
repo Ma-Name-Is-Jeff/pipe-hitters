@@ -487,27 +487,86 @@ function flushLevel() {
   levelBatches.clear();
 }
 
+function makeCanvasTexture(draw, repeatX, repeatY, size) {
+  const c = document.createElement("canvas");
+  const s = size || 256;
+  c.width = s;
+  c.height = s;
+  draw(c.getContext("2d"), s);
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(repeatX, repeatY);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function drawGrass(ctx, s) {
+  ctx.fillStyle = "#3c5a33";
+  ctx.fillRect(0, 0, s, s);
+  for (let i = 0; i < 3200; i++) {
+    const x = Math.random() * s, y = Math.random() * s;
+    const g = 52 + Math.random() * 55;
+    ctx.fillStyle = "rgba(" + (28 + Math.random() * 28) + "," + g + "," + (18 + Math.random() * 22) + "," + (0.3 + Math.random() * 0.45) + ")";
+    ctx.fillRect(x, y, 1 + Math.random() * 3, 1 + Math.random() * 3);
+  }
+  for (let i = 0; i < 1100; i++) {
+    const x = Math.random() * s, y = Math.random() * s;
+    const h = 3 + Math.random() * 8;
+    const lean = (Math.random() - 0.5) * 3.2;
+    ctx.strokeStyle = "rgba(" + (24 + Math.random() * 32) + "," + (72 + Math.random() * 72) + "," + (18 + Math.random() * 28) + "," + (0.4 + Math.random() * 0.45) + ")";
+    ctx.lineWidth = 0.8 + Math.random();
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.quadraticCurveTo(x + lean * 0.5, y - h * 0.55, x + lean, y - h);
+    ctx.stroke();
+  }
+}
+
+function drawDirt(ctx, s) {
+  ctx.fillStyle = "#6a5840";
+  ctx.fillRect(0, 0, s, s);
+  for (let i = 0; i < 2200; i++) {
+    const x = Math.random() * s, y = Math.random() * s;
+    ctx.fillStyle = "rgba(" + (88 + Math.random() * 55) + "," + (68 + Math.random() * 42) + "," + (36 + Math.random() * 28) + "," + (0.28 + Math.random() * 0.45) + ")";
+    ctx.beginPath();
+    ctx.arc(x, y, 0.8 + Math.random() * 4.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
 function buildCompound() {
+  const groundSize = WORLD * 2 + 16;
+  const grassTex = makeCanvasTexture(drawGrass, groundSize / 4.5, groundSize / 4.5);
+  const dirtTex = makeCanvasTexture(drawDirt, 8, 28);
+  const dirtMat = new THREE.MeshLambertMaterial({ map: dirtTex, color: 0xd8c8a8 });
   const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(WORLD * 2 + 16, WORLD * 2 + 16),
-    new THREE.MeshLambertMaterial({ color: COL.ground })
+    new THREE.PlaneGeometry(groundSize, groundSize),
+    new THREE.MeshLambertMaterial({ map: grassTex, color: 0xd4e0c8 })
   );
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
   scene.add(ground);
 
-  const road = new THREE.Mesh(
-    new THREE.PlaneGeometry(16, WORLD * 2 - 6),
-    new THREE.MeshLambertMaterial({ color: COL.road })
-  );
-  road.rotation.x = -Math.PI / 2;
-  road.position.y = 0.015;
-  road.receiveShadow = true;
-  scene.add(road);
+  function addPath(x, z, w, d, rot) {
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, d), dirtMat);
+    mesh.rotation.x = -Math.PI / 2;
+    if (rot) mesh.rotation.z = rot;
+    mesh.position.set(x, 0.015, z);
+    mesh.receiveShadow = true;
+    scene.add(mesh);
+    return mesh;
+  }
+  addPath(0, 0, 11, WORLD * 2 - 8, 0);
+  addPath(0, 8, 86, 8, 0);
+  addPath(-22, -30, 36, 7, 0.15);
+  addPath(20, -40, 32, 7, -0.2);
 
   const startPad = new THREE.Mesh(
-    new THREE.PlaneGeometry(12, 10),
-    new THREE.MeshLambertMaterial({ color: COL.pad })
+    new THREE.PlaneGeometry(6, 5.5),
+    new THREE.MeshLambertMaterial({ map: dirtTex, color: 0xc8c0a8 })
   );
   startPad.rotation.x = -Math.PI / 2;
   startPad.position.set(START.x, 0.02, START.z);
@@ -515,8 +574,8 @@ function buildCompound() {
   scene.add(startPad);
 
   const exPad = new THREE.Mesh(
-    new THREE.PlaneGeometry(12, 10),
-    new THREE.MeshLambertMaterial({ color: COL.extract })
+    new THREE.PlaneGeometry(8, 7),
+    new THREE.MeshLambertMaterial({ map: dirtTex, color: 0x9aaa88 })
   );
   exPad.rotation.x = -Math.PI / 2;
   exPad.position.set(EXTRACT.x, 0.02, EXTRACT.z);
@@ -571,11 +630,11 @@ function buildCompound() {
   addHurdle(-3, -4, false);
   addHurdle(6, -62, true);
 
-  addDeco(0, 0.03, START.z - 2.2, 0.8, 0.02, 2.6, COL.mark);
-  addDeco(-0.7, 0.03, START.z - 3.4, 0.6, 0.02, 0.6, COL.mark);
-  addDeco(0.7, 0.03, START.z - 3.4, 0.6, 0.02, 0.6, COL.mark);
-  addDeco(0, 0.03, EXTRACT.z + 0.8, 5.2, 0.02, 0.7, COL.mark);
-  addDeco(0, 0.03, EXTRACT.z - 1.0, 3.6, 0.02, 0.55, COL.mark);
+  addDeco(0, 0.03, START.z - 1.4, 0.35, 0.02, 1.4, COL.mark);
+  addDeco(-0.35, 0.03, START.z - 2.0, 0.3, 0.02, 0.3, COL.mark);
+  addDeco(0.35, 0.03, START.z - 2.0, 0.3, 0.02, 0.3, COL.mark);
+  addDeco(0, 0.03, EXTRACT.z + 0.6, 3.2, 0.02, 0.4, COL.mark);
+  addDeco(0, 0.03, EXTRACT.z - 0.6, 2.2, 0.02, 0.35, COL.mark);
   addSolid(-5.2, 0, -100.2, 1.2, 3.6, 1.2, COL.peri, false, false);
   addSolid(5.2, 0, -100.2, 1.2, 3.6, 1.2, COL.peri, false, false);
   addDeco(0, 3.3, -100.2, 11, 0.32, 0.65, COL.mark);
