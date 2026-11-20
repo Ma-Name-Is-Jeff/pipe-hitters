@@ -1996,7 +1996,7 @@ function slideSideFromDir(vx, vz, yaw) {
   const fwd = (vx * fx + vz * fz) / n;
   const side = (vx * rx + vz * rz) / n;
   const denom = Math.abs(side) + Math.max(fwd, 0.05);
-  return Math.max(-1, Math.min(1, side / denom));
+  return Math.max(-1, Math.min(1, -side / denom));
 }
 
 function wishDir() {
